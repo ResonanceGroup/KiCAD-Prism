@@ -9,6 +9,7 @@ import { CommentForm } from "./comment-form";
 import { CommentPanel } from "./comment-panel";
 import type { User } from "@/types/auth";
 import type { Comment, CommentContext } from "@/types/comments";
+import type { ECadViewerElement } from "@/types/ecad-viewer";
 
 const Model3DViewer = lazy(() =>
     import("./model-3d-viewer").then((module) => ({ default: module.Model3DViewer }))
@@ -52,18 +53,18 @@ const isAbortError = (error: unknown): boolean =>
     error instanceof DOMException && error.name === "AbortError";
 
 export function Visualizer({ projectId, user }: VisualizerProps) {
-    const [schematicViewerElement, setSchematicViewerElement] = useState<HTMLElement | null>(null);
-    const [pcbViewerElement, setPcbViewerElement] = useState<HTMLElement | null>(null);
-    const schematicViewerRef = useRef<HTMLElement | null>(null);
-    const pcbViewerRef = useRef<HTMLElement | null>(null);
+    const [schematicViewerElement, setSchematicViewerElement] = useState<ECadViewerElement | null>(null);
+    const [pcbViewerElement, setPcbViewerElement] = useState<ECadViewerElement | null>(null);
+    const schematicViewerRef = useRef<ECadViewerElement | null>(null);
+    const pcbViewerRef = useRef<ECadViewerElement | null>(null);
 
     // Callback refs to sync state and refs
-    const setSchematicViewerRef = useCallback((node: HTMLElement | null) => {
+    const setSchematicViewerRef = useCallback((node: ECadViewerElement | null) => {
         schematicViewerRef.current = node;
         setSchematicViewerElement(node);
     }, []);
 
-    const setPcbViewerRef = useCallback((node: HTMLElement | null) => {
+    const setPcbViewerRef = useCallback((node: ECadViewerElement | null) => {
         pcbViewerRef.current = node;
         setPcbViewerElement(node);
     }, []);
@@ -94,11 +95,10 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
     const [copiedField, setCopiedField] = useState<string | null>(null);
     const activeCommentContext: CommentContext | null = activeTab === "sch" ? "SCH" : activeTab === "pcb" ? "PCB" : null;
 
-    const applyCommentModeToViewer = useCallback((viewer: HTMLElement | null, enabled: boolean) => {
+    const applyCommentModeToViewer = useCallback((viewer: ECadViewerElement | null, enabled: boolean) => {
         if (!viewer) return;
-        const viewerAny = viewer as any;
-        if (viewerAny.setCommentMode) {
-            viewerAny.setCommentMode(enabled);
+        if (viewer.setCommentMode) {
+            viewer.setCommentMode(enabled);
             return;
         }
 
@@ -428,6 +428,11 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
         }
     }, [activeTab, commentMode, applyCommentModeToViewer]);
 
+    useEffect(() => {
+        schematicViewerRef.current?.setCrossProbeEnabled(false);
+        pcbViewerRef.current?.setCrossProbeEnabled(false);
+    }, [schematicViewerElement, pcbViewerElement]);
+
     // Submit Comment
     const handleSubmitComment = async (content: string) => {
         if (!pendingLocation) return;
@@ -472,14 +477,12 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
         const viewer = comment.context === "SCH" ? schematicViewerRef.current : pcbViewerRef.current;
         if (!viewer) return;
 
-        const viewerAny = viewer as any;
-
         if (comment.context === "SCH" && comment.location.page) {
-            viewerAny.switchPage(comment.location.page);
+            viewer.switchPage(comment.location.page);
         }
 
-        if (viewerAny.zoomToLocation) {
-            viewerAny.zoomToLocation(comment.location.x, comment.location.y);
+        if (viewer.zoomToLocation) {
+            viewer.zoomToLocation(comment.location.x, comment.location.y);
         }
     };
 
@@ -755,6 +758,8 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                             <ecad-viewer
                                 ref={setSchematicViewerRef}
                                 style={{ width: '100%', height: '100%' }}
+                                show-header="true"
+                                header-sections="beginning,end"
                                 key={`schematic-viewer-${projectId}`}
                             >
                                 <EcadBlob filename="root.kicad_sch" content={schematicContent} />
@@ -779,6 +784,8 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                             <ecad-viewer
                                 ref={setPcbViewerRef}
                                 style={{ width: '100%', height: '100%' }}
+                                show-header="true"
+                                header-sections="beginning,end"
                                 key={`pcb-viewer-${projectId}`}
                             >
                                 <EcadBlob filename="board.kicad_pcb" content={pcbContent} />
