@@ -715,6 +715,7 @@ async def update_project_config(
     
     # Clear cache to ensure fresh resolution
     path_config_service.clear_config_cache(project.path)
+    project_service.invalidate_project_caches()
     
     # Get resolved paths
     resolved = path_config_service.resolve_paths(project.path, config)
@@ -771,6 +772,7 @@ async def update_project_name(
     
     # Save to .prism.json
     path_config_service.save_path_config(project.path, config)
+    project_service.invalidate_project_caches()
     
     return {
         "display_name": display_name,

@@ -188,7 +188,7 @@ def _descendant_ids(root_folder_id: str, children: Dict[Optional[str], List[str]
 
 def _project_ids_by_folder(folders: Dict[str, Folder]) -> Dict[str, List[str]]:
     by_folder: Dict[str, List[str]] = {folder_id: [] for folder_id in folders.keys()}
-    for project in project_service.get_registered_projects():
+    for project in project_service.get_registered_project_records():
         if project.folder_id and project.folder_id in by_folder:
             by_folder[project.folder_id].append(project.id)
     return by_folder
@@ -208,7 +208,20 @@ def filter_projects_for_role(
     projects: List[project_service.Project],
     user_role: Optional[Role],
 ) -> List[project_service.Project]:
-    return [project for project in projects if is_folder_visible_to_role(project.folder_id, user_role)]
+    if user_role is None:
+        return projects
+
+    folders = _load_folders()
+
+    def project_visible(project: project_service.Project) -> bool:
+        if project.folder_id is None:
+            return True
+        folder = folders.get(project.folder_id)
+        if not folder:
+            return False
+        return _is_folder_visible_to_role(folder, user_role)
+
+    return [project for project in projects if project_visible(project)]
 
 
 def get_folder_tree(user_role: Optional[Role] = None) -> List[FolderTreeItem]:
@@ -351,7 +364,7 @@ def delete_folder(folder_id: str, cascade: bool = True) -> bool:
         raise ValueError("Folder has subfolders. Use cascade delete or move subfolders first.")
 
     # Move all projects under deleted folders back to root.
-    for project in project_service.get_registered_projects():
+    for project in project_service.get_registered_project_records():
         if project.folder_id in delete_ids:
             project_service.update_project_folder_id(project.id, None)
 
@@ -388,7 +401,14 @@ def get_folder_contents(folder_id: Optional[str], user_role: Optional[Role] = No
         [
             project
             for project in project_service.get_registered_projects()
-            if project.folder_id == folder_id and is_folder_visible_to_role(project.folder_id, user_role)
+            if project.folder_id == folder_id
+            and (
+                folder_id is None
+                or (
+                    (folder := folders.get(project.folder_id)) is not None
+                    and _is_folder_visible_to_role(folder, user_role)
+                )
+            )
         ],
         key=lambda project: (project.display_name or project.name).lower(),
     )

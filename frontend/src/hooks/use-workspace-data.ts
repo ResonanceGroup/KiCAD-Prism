@@ -22,6 +22,11 @@ interface WorkspaceDataState {
   deleteProject: (projectId: string) => Promise<WorkspaceActionResult>;
 }
 
+interface WorkspaceBootstrapResponse {
+  projects: Project[];
+  folders: FolderTreeItem[];
+}
+
 export function useWorkspaceData(): WorkspaceDataState {
   const [projects, setProjects] = useState<Project[]>([]);
   const [folders, setFolders] = useState<FolderTreeItem[]>([]);
@@ -32,40 +37,22 @@ export function useWorkspaceData(): WorkspaceDataState {
     setLoading(true);
     setError(null);
 
-    const [projectsResult, foldersResult] = await Promise.allSettled([
-      fetchJson<Project[]>("/api/projects/", undefined, "Failed to load projects"),
-      fetchJson<FolderTreeItem[]>("/api/folders/tree", undefined, "Failed to load folders"),
-    ]);
-
-    if (projectsResult.status === "fulfilled") {
-      setProjects(projectsResult.value);
-    } else {
-      setProjects([]);
-    }
-
-    if (foldersResult.status === "fulfilled") {
-      setFolders(foldersResult.value);
-    } else {
-      setFolders([]);
-    }
-
-    if (projectsResult.status === "rejected") {
-      const message =
-        projectsResult.reason instanceof Error
-          ? projectsResult.reason.message
-          : "Failed to load projects";
-      setError(message);
-    } else if (foldersResult.status === "rejected") {
-      const message =
-        foldersResult.reason instanceof Error
-          ? foldersResult.reason.message
-          : "Failed to load folders";
-      setError(message);
-    } else {
+    try {
+      const data = await fetchJson<WorkspaceBootstrapResponse>(
+        "/api/workspace/bootstrap",
+        undefined,
+        "Failed to load workspace"
+      );
+      setProjects(data.projects);
+      setFolders(data.folders);
       setError(null);
+    } catch (error) {
+      setProjects([]);
+      setFolders([]);
+      setError(error instanceof Error ? error.message : "Failed to load workspace");
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }, []);
 
   useEffect(() => {

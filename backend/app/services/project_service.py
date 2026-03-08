@@ -1,10 +1,16 @@
 import os
-import datetime
+import json
+import time
+import uuid
 import shutil
+import threading
+import datetime
+import subprocess
+from typing import Dict, List, Optional
+
 from git import Repo, RemoteProgress
-from typing import List, Optional, Dict
 from pydantic import BaseModel
-from fastapi.responses import FileResponse
+
 from app.services import path_config_service
 
 class Project(BaseModel):
@@ -22,6 +28,20 @@ class Project(BaseModel):
     parent_repo_path: Optional[str] = None  # Path to parent repo for Type-2
     folder_id: Optional[str] = None  # Optional folder assignment for workspace organization
 
+
+class RegisteredProjectRecord(BaseModel):
+    id: str
+    name: str
+    path: str
+    description: str
+    last_modified: str
+    sub_path: Optional[str] = None
+    parent_repo: Optional[str] = None
+    repo_url: Optional[str] = None
+    import_type: Optional[str] = None
+    parent_repo_path: Optional[str] = None
+    folder_id: Optional[str] = None
+
 # PROJECTS_ROOT is where imported projects are stored.
 # In Docker, this should be a persistent volume mount.
 PROJECTS_ROOT = os.environ.get("KICAD_PROJECTS_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/projects")))
@@ -37,7 +57,12 @@ os.makedirs(PROJECTS_ROOT, exist_ok=True)
 os.makedirs(MONOREPOS_ROOT, exist_ok=True)
 os.makedirs(os.path.join(PROJECTS_ROOT, "type1"), exist_ok=True)
 
-import json
+PROJECTS_CACHE_TTL = 5.0  # seconds
+
+_project_records_cache: List[RegisteredProjectRecord] = []
+_project_records_cache_time: float = 0
+_projects_cache: List[Project] = []
+_projects_cache_time: float = 0
 
 def _load_project_registry() -> Dict[str, dict]:
     """Load the project registry from JSON file."""
@@ -54,8 +79,18 @@ def _save_project_registry(registry: Dict[str, dict]) -> None:
     try:
         with open(PROJECT_REGISTRY_FILE, 'w') as f:
             json.dump(registry, f, indent=2)
+        invalidate_project_caches()
     except IOError as e:
         print(f"Warning: Failed to save project registry: {e}")
+
+
+def invalidate_project_caches() -> None:
+    global _project_records_cache, _project_records_cache_time
+    global _projects_cache, _projects_cache_time
+    _project_records_cache = []
+    _project_records_cache_time = 0
+    _projects_cache = []
+    _projects_cache_time = 0
 
 def register_project(project_id: str, name: str, path: str, repo_url: str,
                      sub_path: Optional[str] = None, parent_repo: Optional[str] = None,
@@ -130,10 +165,75 @@ def _normalize_path(path: str) -> str:
     # Return original path if no conversion worked
     return path
 
-# Cache for registered projects
-_projects_cache: List[Project] = []
-_projects_cache_time: float = 0
-PROJECTS_CACHE_TTL = 5.0 # seconds
+def _record_last_modified(path: str, fallback: str) -> str:
+    try:
+        mtime = os.path.getmtime(path)
+        return datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+    except OSError:
+        return fallback
+
+
+def _record_to_project(record: RegisteredProjectRecord) -> Project:
+    custom_display_name = path_config_service.get_project_display_name(record.path)
+    custom_description = path_config_service.get_project_description(record.path)
+
+    return Project(
+        id=record.id,
+        name=record.name,
+        display_name=custom_display_name,
+        description=custom_description or record.description,
+        path=record.path,
+        last_modified=record.last_modified,
+        thumbnail_url=f"/api/projects/{record.id}/thumbnail",
+        sub_path=record.sub_path,
+        parent_repo=record.parent_repo,
+        repo_url=record.repo_url,
+        import_type=record.import_type,
+        parent_repo_path=record.parent_repo_path,
+        folder_id=record.folder_id,
+    )
+
+
+def get_registered_project_records() -> List[RegisteredProjectRecord]:
+    """
+    Return normalized registry-backed project records without hydrating `.prism.json`.
+    """
+    global _project_records_cache, _project_records_cache_time
+
+    current_time = time.time()
+    if _project_records_cache and (current_time - _project_records_cache_time) < PROJECTS_CACHE_TTL:
+        return _project_records_cache
+
+    registry = _load_project_registry()
+    records: List[RegisteredProjectRecord] = []
+    for project_id, data in registry.items():
+        normalized_path = _normalize_path(data["path"])
+        if not os.path.exists(normalized_path):
+            continue
+
+        records.append(
+            RegisteredProjectRecord(
+                id=project_id,
+                name=data["name"],
+                path=normalized_path,
+                description=data.get("description", f"Project {data['name']}"),
+                last_modified=_record_last_modified(normalized_path, data.get("last_modified", "Unknown")),
+                sub_path=data.get("sub_path"),
+                parent_repo=data.get("parent_repo"),
+                repo_url=data.get("repo_url"),
+                import_type=data.get("import_type"),
+                parent_repo_path=(
+                    _normalize_path(data.get("parent_repo_path"))
+                    if data.get("import_type") == "type2_subproject" and data.get("parent_repo_path")
+                    else None
+                ),
+                folder_id=data.get("folder_id"),
+            )
+        )
+
+    _project_records_cache = records
+    _project_records_cache_time = current_time
+    return records
 
 def get_registered_projects() -> List[Project]:
     """
@@ -146,42 +246,7 @@ def get_registered_projects() -> List[Project]:
     if _projects_cache and (current_time - _projects_cache_time) < PROJECTS_CACHE_TTL:
         return _projects_cache
         
-    registry = _load_project_registry()
-    projects = []
-    for project_id, data in registry.items():
-        # Normalize path for current environment
-        normalized_path = _normalize_path(data["path"])
-        
-        # Verify the project path still exists
-        if not os.path.exists(normalized_path):
-            continue
-        
-        # Update last modified time
-        try:
-            mtime = os.path.getmtime(normalized_path)
-            last_modified = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
-        except:
-            last_modified = data.get("last_modified", "Unknown")
-        
-        # Get custom display name from .prism.json
-        custom_display_name = path_config_service.get_project_display_name(normalized_path)
-        custom_description = path_config_service.get_project_description(normalized_path)
-        
-        projects.append(Project(
-            id=project_id,
-            name=data["name"],
-            display_name=custom_display_name,
-            description=custom_description or data.get("description", f"Project {data['name']}"),
-            path=normalized_path,
-            last_modified=last_modified,
-            thumbnail_url=f"/api/projects/{project_id}/thumbnail",
-            sub_path=data.get("sub_path"),
-            parent_repo=data.get("parent_repo"),
-            repo_url=data.get("repo_url"),
-            import_type=data.get("import_type"),
-            parent_repo_path=_normalize_path(data.get("parent_repo_path")) if data.get("import_type") == "type2_subproject" else None,
-            folder_id=data.get("folder_id")
-        ))
+    projects = [_record_to_project(record) for record in get_registered_project_records()]
     
     _projects_cache = projects
     _projects_cache_time = current_time
@@ -200,45 +265,11 @@ def get_project_by_id(project_id: str) -> Optional[Project]:
         if project:
             return project
 
-    registry = _load_project_registry()
-    if project_id not in registry:
+    record = next((item for item in get_registered_project_records() if item.id == project_id), None)
+    if not record:
         return None
-        
-    data = registry[project_id]
-    normalized_path = _normalize_path(data["path"])
-    
-    if not os.path.exists(normalized_path):
-        return None
-        
-    try:
-        mtime = os.path.getmtime(normalized_path)
-        last_modified = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
-    except:
-        last_modified = data.get("last_modified", "Unknown")
-        
-    custom_display_name = path_config_service.get_project_display_name(normalized_path)
-    custom_description = path_config_service.get_project_description(normalized_path)
-    
-    return Project(
-        id=project_id,
-        name=data["name"],
-        display_name=custom_display_name,
-        description=custom_description or data.get("description", f"Project {data['name']}"),
-        path=normalized_path,
-        last_modified=last_modified,
-        thumbnail_url=f"/api/projects/{project_id}/thumbnail",
-        sub_path=data.get("sub_path"),
-        parent_repo=data.get("parent_repo"),
-        repo_url=data.get("repo_url"),
-        import_type=data.get("import_type"),
-        parent_repo_path=_normalize_path(data.get("parent_repo_path")) if data.get("import_type") == "type2_subproject" else None,
-        folder_id=data.get("folder_id")
-    )
 
-import threading
-import uuid
-import time
-import subprocess
+    return _record_to_project(record)
 
 # Global job store: {job_id: {status: str, message: str, percent: float, project_id: str, error: str, logs: list[str], type: str}}
 jobs = {}
@@ -587,8 +618,7 @@ def start_workflow_job(project_id: str, workflow_type: str, author: str = "anony
     return job_id
 
 def get_project_thumbnail_path(project_id: str) -> Optional[str]:
-    projects = get_registered_projects()
-    project = next((p for p in projects if p.id == project_id), None)
+    project = get_project_by_id(project_id)
     if not project:
         print(f"[DEBUG] Project {project_id} not found")
         return None
@@ -707,11 +737,6 @@ def delete_project(project_id: str) -> bool:
         except Exception as e:
             print(f"Warning: Failed to delete project directory {project_path}: {e}")
     
-    # Clear projects cache so deleted entries are not returned.
-    global _projects_cache, _projects_cache_time
-    _projects_cache = []
-    _projects_cache_time = 0
-
     return True
 
 
@@ -727,10 +752,6 @@ def update_project_folder_id(project_id: str, folder_id: Optional[str]) -> bool:
     registry[project_id]["folder_id"] = folder_id
     _save_project_registry(registry)
 
-    # Clear projects cache so subsequent reads include updated folder_id.
-    global _projects_cache, _projects_cache_time
-    _projects_cache = []
-    _projects_cache_time = 0
     return True
 
 
@@ -754,9 +775,6 @@ def update_project_description(project_id: str, description: str) -> bool:
         registry[project_id]["description"] = description
         _save_project_registry(registry)
 
-    global _projects_cache, _projects_cache_time
-    _projects_cache = []
-    _projects_cache_time = 0
     return True
 
 def get_subsheets(project_path: str, main_schematic: str) -> List[str]:

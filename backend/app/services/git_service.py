@@ -31,24 +31,12 @@ def get_commits_list_filtered(repo_path: str, relative_path: str = None, limit: 
     try:
         repo = Repo(repo_path)
         commits = []
-        
-        for commit in repo.iter_commits(max_count=limit * 3):  # Fetch more to account for filtering
-            # If relative_path provided, filter to commits that touched files under that path
-            if relative_path:
-                # Use diff to get changed files - more reliable than stats
-                changed_files = []
-                if commit.parents:
-                    # Compare with parent to get changed files
-                    diff = commit.parents[0].diff(commit)
-                    changed_files = [d.a_path or d.b_path for d in diff if d.a_path or d.b_path]
-                else:
-                    # Initial commit - list all files in tree
-                    changed_files = [item.path for item in commit.tree.traverse() if item.type == 'blob']
-                
-                # Check if any file starts with the relative_path
-                if not any(f.startswith(relative_path) for f in changed_files):
-                    continue
-            
+
+        iter_kwargs = {"max_count": limit}
+        if relative_path:
+            iter_kwargs["paths"] = relative_path
+
+        for commit in repo.iter_commits(**iter_kwargs):
             commits.append({
                 "hash": commit.hexsha[:7],
                 "full_hash": commit.hexsha,

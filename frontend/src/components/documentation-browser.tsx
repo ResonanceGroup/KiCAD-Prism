@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, File, FileText, Folder, ChevronRight, ChevronDown, Eye, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -154,7 +154,7 @@ export function DocumentationBrowser({ projectId, commit }: DocumentationBrowser
         window.open(url, '_blank');
     };
 
-    const tree = buildFileTree(files);
+    const tree = useMemo(() => buildFileTree(files), [files]);
 
     if (loading) {
         return <Skeleton className="h-64 w-full" />;

@@ -331,6 +331,19 @@ def _detect_jobset_path(project_path: Path) -> Optional[str]:
     return None
 
 
+PATH_DETECTORS = {
+    "schematic": _detect_schematic_path,
+    "pcb": _detect_pcb_path,
+    "subsheets": _detect_subsheets_path,
+    "designOutputs": _detect_design_outputs_path,
+    "manufacturingOutputs": _detect_manufacturing_outputs_path,
+    "documentation": _detect_documentation_path,
+    "thumbnail": _detect_thumbnail_path,
+    "readme": _detect_readme_path,
+    "jobset": _detect_jobset_path,
+}
+
+
 def detect_paths(project_path: str) -> PathConfig:
     """
     Auto-detect path configuration for a project.
@@ -377,31 +390,21 @@ def get_path_config(project_path: str, use_cache: bool = True) -> PathConfig:
         if cached_entry.get("prism_mtime") == prism_mtime:
             return PathConfig(**cached_entry["config"])
 
-    # 1. Auto-detect base config
-    detected = detect_paths(project_path)
+    project_dir = Path(project_path)
 
-    # 2. Fill in defaults where detection failed
-    for key, default_value in DEFAULT_PATHS.items():
-        current_value = getattr(detected, key)
-        if current_value is None:
-            # Don't default subsheets - None means "root directory"
-            if key != "subsheets":
-                setattr(detected, key, default_value)
+    # Start from explicit config so complete `.prism.json` files skip auto-detection.
+    explicit_config = _normalize_config_values(_load_prism_config(project_path) or {})
+    merged_dict: Dict[str, Any] = dict(explicit_config)
 
-    detected_dict = detected.dict()
+    for key in PATH_FIELDS:
+        if merged_dict.get(key) is None:
+            detected_value = PATH_DETECTORS[key](project_dir)
+            if detected_value is not None:
+                merged_dict[key] = detected_value
+            elif key != "subsheets":
+                merged_dict[key] = DEFAULT_PATHS[key]
 
-    # 3. Overlay explicit .prism.json config field-by-field
-    # Empty path fields are treated as unset and keep auto-detected/default values.
-    explicit_config = _load_prism_config(project_path) or {}
-    explicit_config = _normalize_config_values(explicit_config)
-    for key, value in explicit_config.items():
-        if key in PATH_FIELDS:
-            if value is not None:
-                detected_dict[key] = value
-        else:
-            detected_dict[key] = value
-
-    merged = PathConfig(**detected_dict)
+    merged = PathConfig(**merged_dict)
     _config_cache[cache_key] = {
         "config": merged.dict(),
         "prism_mtime": prism_mtime,

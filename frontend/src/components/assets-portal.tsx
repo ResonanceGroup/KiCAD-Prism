@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, File, FileText, Package, Image as ImageIcon, Folder, ChevronRight, ChevronDown, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -168,8 +168,10 @@ export function AssetsPortal({ projectId }: AssetsPortalProps) {
         window.open(url, '_blank');
     };
 
-    const designTree = buildFileTree(designFiles);
-    const mfgTree = buildFileTree(mfgFiles);
+    const designTree = useMemo(() => buildFileTree(designFiles), [designFiles]);
+    const mfgTree = useMemo(() => buildFileTree(mfgFiles), [mfgFiles]);
+    const designTotalSize = useMemo(() => calculateTotalSize(designFiles), [designFiles]);
+    const mfgTotalSize = useMemo(() => calculateTotalSize(mfgFiles), [mfgFiles]);
 
     if (loading) {
         return (
@@ -191,7 +193,7 @@ export function AssetsPortal({ projectId }: AssetsPortalProps) {
                 <div className="flex items-center justify-between">
                     <h3 className="text-lg font-semibold">Design Outputs</h3>
                     <span className="text-xs text-muted-foreground">
-                        {formatBytes(calculateTotalSize(designFiles))} total
+                        {formatBytes(designTotalSize)} total
                     </span>
                 </div>
                 <div className="border rounded-lg p-4 max-h-[600px] overflow-y-auto">
@@ -219,7 +221,7 @@ export function AssetsPortal({ projectId }: AssetsPortalProps) {
                 <div className="flex items-center justify-between">
                     <h3 className="text-lg font-semibold">Manufacturing Outputs</h3>
                     <span className="text-xs text-muted-foreground">
-                        {formatBytes(calculateTotalSize(mfgFiles))} total
+                        {formatBytes(mfgTotalSize)} total
                     </span>
                 </div>
                 <div className="border rounded-lg p-4 max-h-[600px] overflow-y-auto">

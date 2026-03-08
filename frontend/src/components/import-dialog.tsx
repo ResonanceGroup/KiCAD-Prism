@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   Dialog,
   DialogContent,
@@ -76,8 +76,40 @@ export function ImportDialog({
   const [state, setState] = useState<ImportState>({ step: "input" });
   const [url, setUrl] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const pollTimeoutRef = useRef<number | null>(null);
+  const pollControllerRef = useRef<AbortController | null>(null);
+  const pollingTokenRef = useRef(0);
+
+  const clearPollingHandles = useCallback(() => {
+    if (pollTimeoutRef.current !== null) {
+      window.clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    if (pollControllerRef.current) {
+      pollControllerRef.current.abort();
+      pollControllerRef.current = null;
+    }
+  }, []);
+
+  const stopPolling = useCallback(() => {
+    pollingTokenRef.current += 1;
+    clearPollingHandles();
+  }, [clearPollingHandles]);
+
+  useEffect(() => {
+    return () => {
+      stopPolling();
+    };
+  }, [stopPolling]);
+
+  useEffect(() => {
+    if (!open) {
+      stopPolling();
+    }
+  }, [open, stopPolling]);
 
   const reset = () => {
+    stopPolling();
     setState({ step: "input" });
     setUrl("");
     setSelectedPaths(new Set());
@@ -91,6 +123,7 @@ export function ImportDialog({
   const analyzeRepo = async () => {
     if (!url.trim()) return;
 
+    stopPolling();
     setState({ step: "analyzing", url });
 
     try {
@@ -120,12 +153,19 @@ export function ImportDialog({
   };
 
   const pollAnalysisJob = async (jobId: string, repoUrl: string) => {
+    stopPolling();
+    const pollingToken = pollingTokenRef.current;
+
     const poll = async () => {
+      const controller = new AbortController();
       try {
-        const res = await fetch(`/api/projects/jobs/${jobId}`);
+        pollControllerRef.current = controller;
+        const res = await fetch(`/api/projects/jobs/${jobId}`, { signal: controller.signal });
+        if (pollingTokenRef.current !== pollingToken) return;
         if (!res.ok) throw new Error("Failed to get job status");
 
         const status: JobStatus = await res.json();
+        if (pollingTokenRef.current !== pollingToken) return;
 
         // Update state with ongoing job status
         setState({ step: "analyzing", url: repoUrl, jobId, status });
@@ -155,18 +195,28 @@ export function ImportDialog({
           });
         } else {
           // Continue polling
-          setTimeout(poll, 1000);
+          pollTimeoutRef.current = window.setTimeout(() => {
+            void poll();
+          }, 1000);
         }
       } catch (error: any) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        if (pollingTokenRef.current !== pollingToken) return;
         setState({
           step: "complete",
           success: false,
           message: error.message || "Failed to check analysis status",
         });
+      } finally {
+        if (pollControllerRef.current === controller) {
+          pollControllerRef.current = null;
+        }
       }
     };
 
-    poll();
+    void poll();
   };
 
   const startImport = async () => {
@@ -179,6 +229,7 @@ export function ImportDialog({
         : Array.from(selectedPaths);
 
     try {
+      stopPolling();
       const res = await fetch("/api/projects/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -208,6 +259,9 @@ export function ImportDialog({
   };
 
   const pollJobStatus = async (jobId: string, repoUrl: string) => {
+    stopPolling();
+    const pollingToken = pollingTokenRef.current;
+
     const fetchCommentsSourceUrls = async (projectIds: string[]): Promise<CommentsSourceUrls[]> => {
       const entries = await Promise.all(
         projectIds.map(async (id) => {
@@ -225,11 +279,15 @@ export function ImportDialog({
     };
 
     const poll = async () => {
+      const controller = new AbortController();
       try {
-        const res = await fetch(`/api/projects/jobs/${jobId}`);
+        pollControllerRef.current = controller;
+        const res = await fetch(`/api/projects/jobs/${jobId}`, { signal: controller.signal });
+        if (pollingTokenRef.current !== pollingToken) return;
         if (!res.ok) throw new Error("Failed to get job status");
 
         const status: JobStatus = await res.json();
+        if (pollingTokenRef.current !== pollingToken) return;
 
         setState({ step: "importing", url: repoUrl, jobId, status });
 
@@ -243,6 +301,8 @@ export function ImportDialog({
               console.warn("Unable to load comments source URLs", error);
             }
           }
+
+          if (pollingTokenRef.current !== pollingToken) return;
 
           setState({
             step: "complete",
@@ -260,19 +320,29 @@ export function ImportDialog({
           });
         } else {
           // Continue polling
-          setTimeout(poll, 1000);
+          pollTimeoutRef.current = window.setTimeout(() => {
+            void poll();
+          }, 1000);
         }
       } catch (error: any) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        if (pollingTokenRef.current !== pollingToken) return;
         setState({
           step: "complete",
           success: false,
           message: error.message || "Failed to check import status",
           commentsSourceUrls: undefined,
         });
+      } finally {
+        if (pollControllerRef.current === controller) {
+          pollControllerRef.current = null;
+        }
       }
     };
 
-    poll();
+    void poll();
   };
 
   const toggleProjectSelection = (relativePath: string) => {

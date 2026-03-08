@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useDeferredValue, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { User, AuthConfig } from './types/auth';
 import { LoginPage } from './components/login-page';
@@ -20,6 +20,7 @@ function App() {
     const [loading, setLoading] = useState(true);
     const [authError, setAuthError] = useState<string | null>(null);
     const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState("");
+    const deferredWorkspaceSearchQuery = useDeferredValue(workspaceSearchQuery);
 
     // Fetch auth configuration on mount
     useEffect(() => {
@@ -187,7 +188,7 @@ function App() {
 
                         <main className="h-[calc(100vh-4rem)]">
                             <Workspace
-                                searchQuery={workspaceSearchQuery}
+                                searchQuery={deferredWorkspaceSearchQuery}
                                 user={user}
                             />
                         </main>

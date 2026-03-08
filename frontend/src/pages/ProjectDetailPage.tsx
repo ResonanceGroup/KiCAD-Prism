@@ -38,10 +38,6 @@ interface Project {
     last_modified: string;
 }
 
-interface ProjectNameResponse {
-    display_name?: string;
-}
-
 interface ReadmeResponse {
     content: string;
 }
@@ -144,13 +140,8 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                     ? `/api/projects/${projectId}/readme?commit=${currentCommit}`
                     : `/api/projects/${projectId}/readme`;
 
-                const [projectData, nameData, readmeData] = await Promise.all([
+                const [projectData, readmeData] = await Promise.all([
                     fetchJson<Project>(`/api/projects/${projectId}`, { signal: controller.signal }, "Failed to fetch project"),
-                    fetchJson<ProjectNameResponse>(
-                        `/api/projects/${projectId}/name`,
-                        { signal: controller.signal },
-                        "Failed to fetch project name"
-                    ).catch(() => null),
                     fetchJson<ReadmeResponse>(readmeUrl, { signal: controller.signal }, "README not found").catch(() => null),
                 ]);
 
@@ -158,10 +149,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                     return;
                 }
 
-                setProject({
-                    ...projectData,
-                    display_name: nameData?.display_name ?? projectData.display_name,
-                });
+                setProject(projectData);
                 setReadme(readmeData?.content ?? "");
             } catch (err) {
                 if (controller.signal.aborted) {

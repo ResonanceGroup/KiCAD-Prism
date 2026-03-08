@@ -36,6 +36,11 @@ interface PathConfig {
     workflows?: unknown[];
 }
 
+interface ProjectDetailResponse {
+    display_name?: string;
+    description: string;
+}
+
 interface PathConfigDialogProps {
     projectId: string;
     open: boolean;
@@ -95,11 +100,9 @@ export function PathConfigDialog({ projectId, open, onOpenChange }: PathConfigDi
 
     const fetchConfig = useCallback(async (signal?: AbortSignal) => {
         try {
-            // Fetch both path config and project name
-            const [configResponse, nameResponse, descriptionResponse] = await Promise.all([
+            const [configResponse, projectResponse] = await Promise.all([
                 fetch(`/api/projects/${projectId}/config`, { signal }),
-                fetch(`/api/projects/${projectId}/name`, { signal }),
-                fetch(`/api/projects/${projectId}/description`, { signal })
+                fetch(`/api/projects/${projectId}`, { signal })
             ]);
             
             if (configResponse.ok) {
@@ -113,15 +116,11 @@ export function PathConfigDialog({ projectId, open, onOpenChange }: PathConfigDi
                 setWorkflowsError(null);
             }
             
-            if (nameResponse.ok) {
-                const nameData = await nameResponse.json();
-                setConfig(prev => ({ ...prev, projectName: nameData.display_name }));
-                setOriginalConfig(prev => ({ ...prev, projectName: nameData.display_name }));
-            }
-
-            if (descriptionResponse.ok) {
-                const descriptionData = await descriptionResponse.json();
-                const currentDescription = descriptionData?.description || "";
+            if (projectResponse.ok) {
+                const projectData = (await projectResponse.json()) as ProjectDetailResponse;
+                setConfig(prev => ({ ...prev, projectName: projectData.display_name }));
+                setOriginalConfig(prev => ({ ...prev, projectName: projectData.display_name }));
+                const currentDescription = projectData?.description || "";
                 setDescription(currentDescription);
                 setOriginalDescription(currentDescription);
             }
@@ -141,7 +140,7 @@ export function PathConfigDialog({ projectId, open, onOpenChange }: PathConfigDi
             });
             if (response.ok) {
                 const data = await response.json();
-                setConfig(data.detected || {});
+                setConfig((prev) => ({ ...prev, ...(data.detected || {}) }));
                 setSource("auto-detected (preview)");
             }
         } catch (err) {
