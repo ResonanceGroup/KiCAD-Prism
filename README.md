@@ -14,7 +14,7 @@ KiCAD Prism is a web platform for browsing, reviewing, and operating on KiCad re
 - Search projects by name, display name, description, and parent repo.
 
 <p align="center">
-  <img src="assets/KiCAD-Prism-Workspace.png" width="49%" alt="Workspace Overview">
+  <img src="assets/KiCAD-Prism-New-Workspace.png" width="49%" alt="Workspace Overview">
   <img src="assets/KiCAD-Prism-Importing-Repo.png" width="49%" alt="Importing Repositories">
 </p>
 
@@ -47,6 +47,8 @@ KiCAD Prism is a web platform for browsing, reviewing, and operating on KiCad re
   <img src="assets/KiCAD-Prism-Commenting-Mode.png" width="49%" alt="Commenting Mode">
   <img src="assets/KiCAD-Prism-Comment-Dialog.png" width="49%" alt="Comment Dialog">
 </p>
+
+> Integration into KiCAD natively is currently on an experimental custom build of KiCAD v9.99. For now, users can use this platform for tracking comments
 
 ### Workflow Automation
 
