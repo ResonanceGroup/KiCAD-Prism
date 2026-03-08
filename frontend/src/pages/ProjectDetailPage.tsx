@@ -37,12 +37,13 @@ interface Project {
     last_modified: string;
 }
 
-interface ReadmeResponse {
-    content: string;
-}
-
 interface CommitDistanceResponse {
     commits_behind: number;
+}
+
+interface ProjectOverviewResponse {
+    project: Project;
+    readme: string | null;
 }
 
 interface WorkflowJobResponse {
@@ -131,21 +132,21 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
 
         const fetchProjectData = async () => {
             try {
-                const readmeUrl = currentCommit
-                    ? `/api/projects/${projectId}/readme?commit=${currentCommit}`
-                    : `/api/projects/${projectId}/readme`;
-
-                const [projectData, readmeData] = await Promise.all([
-                    fetchJson<Project>(`/api/projects/${projectId}`, { signal: controller.signal }, "Failed to fetch project"),
-                    fetchJson<ReadmeResponse>(readmeUrl, { signal: controller.signal }, "README not found").catch(() => null),
-                ]);
+                const overviewUrl = currentCommit
+                    ? `/api/projects/${projectId}/overview?commit=${encodeURIComponent(currentCommit)}`
+                    : `/api/projects/${projectId}/overview`;
+                const overview = await fetchJson<ProjectOverviewResponse>(
+                    overviewUrl,
+                    { signal: controller.signal },
+                    "Failed to fetch project overview"
+                );
 
                 if (controller.signal.aborted) {
                     return;
                 }
 
-                setProject(projectData);
-                setReadme(readmeData?.content ?? "");
+                setProject(overview.project);
+                setReadme(overview.readme ?? "");
             } catch (err) {
                 if (controller.signal.aborted) {
                     return;

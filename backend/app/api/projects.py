@@ -96,6 +96,38 @@ def _filter_projects_for_user(
 ) -> List[project_service.Project]:
     return folder_service.filter_projects_for_role(projects, user.role)
 
+
+def _load_project_readme_content(
+    project: project_service.Project,
+    commit: Optional[str] = None,
+) -> Optional[str]:
+    config = path_config_service.get_path_config(project.path)
+    readme_filename = config.readme or "README.md"
+
+    if commit:
+        try:
+            return _read_file_from_commit(project, commit, readme_filename)
+        except HTTPException as error:
+            if error.status_code == 404:
+                return None
+            raise
+
+    resolved = path_config_service.resolve_paths(project.path, config)
+    readme_path = resolved.readme_path
+    if not readme_path:
+        return None
+
+    try:
+        return _read_utf8_file(
+            readme_path,
+            not_found_detail="README not found",
+            read_error_prefix="Error reading README",
+        )
+    except HTTPException as error:
+        if error.status_code == 404:
+            return None
+        raise
+
 @router.get("/", response_model=List[project_service.Project])
 async def list_projects(user: AuthenticatedUser = Depends(require_viewer)):
     """Return all registered projects (both Type-1 and Type-2)."""
@@ -319,6 +351,8 @@ async def sync_project_endpoint(project_id: str, user: AuthenticatedUser = Depen
     
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
+
+    file_service.invalidate_file_listing_cache()
     
     return result
 
@@ -360,6 +394,22 @@ async def get_project_thumbnail(project_id: str, user: AuthenticatedUser = Depen
 async def get_project_detail(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
     """Get detailed project information."""
     return get_project_for_role_or_404(project_id, user.role)
+
+
+@router.get("/{project_id}/overview")
+async def get_project_overview(
+    project_id: str,
+    commit: str = None,
+    user: AuthenticatedUser = Depends(require_viewer),
+):
+    """
+    Return project detail and README content in one payload for the overview page.
+    """
+    project = get_project_for_role_or_404(project_id, user.role)
+    return {
+        "project": project.model_dump(),
+        "readme": _load_project_readme_content(project, commit),
+    }
 
 
 @router.get("/{project_id}/comments/source-urls")
@@ -465,33 +515,10 @@ async def get_project_readme(
     For Type-2 projects, uses parent repo with relative path prefix.
     """
     project = get_project_for_role_or_404(project_id, user.role)
-    
-    # Get readme path from config
-    config = path_config_service.get_path_config(project.path)
-    readme_filename = config.readme or "README.md"
-    
-    # If viewing a specific commit, use Git
-    if commit:
-        try:
-            content = _read_file_from_commit(project, commit, readme_filename)
-            return {"content": content}
-        except HTTPException:
-            raise
-    
-    # Otherwise read from filesystem
-    resolved = path_config_service.resolve_paths(project.path)
-    readme_path = resolved.readme_path
-
-    if not readme_path:
+    content = _load_project_readme_content(project, commit)
+    if content is None:
         raise HTTPException(status_code=404, detail="README not found")
-
-    return {
-        "content": _read_utf8_file(
-            readme_path,
-            not_found_detail="README not found",
-            read_error_prefix="Error reading README",
-        )
-    }
+    return {"content": content}
 
 @router.get("/{project_id}/asset/{asset_path:path}")
 async def get_project_asset(
@@ -747,6 +774,7 @@ async def update_project_config(
     # Clear cache to ensure fresh resolution
     path_config_service.clear_config_cache(project.path)
     project_service.invalidate_project_caches()
+    file_service.invalidate_file_listing_cache()
     
     # Get resolved paths
     resolved = path_config_service.resolve_paths(project.path, config)

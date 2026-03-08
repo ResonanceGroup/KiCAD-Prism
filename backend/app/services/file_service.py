@@ -1,4 +1,5 @@
 import os
+import time
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
@@ -12,7 +13,18 @@ class FileItem(BaseModel):
     type: str  # file extension or 'folder'
     is_dir: bool
 
-def get_files_recursive(directory: str, base_path: str = "") -> List[FileItem]:
+FILE_LISTING_CACHE_TTL = 2.0
+_file_listing_cache: dict[str, dict[str, object]] = {}
+
+
+def invalidate_file_listing_cache(directory: Optional[str] = None) -> None:
+    if directory is None:
+        _file_listing_cache.clear()
+        return
+    _file_listing_cache.pop(os.path.abspath(directory), None)
+
+
+def _scan_files_recursive(directory: str, base_path: str = "") -> List[FileItem]:
     """
     Recursively list all files in a directory.
     
@@ -43,7 +55,7 @@ def get_files_recursive(directory: str, base_path: str = "") -> List[FileItem]:
                     is_dir=True
                 ))
                 # Recursively add subdirectory contents
-                items.extend(get_files_recursive(entry.path, rel_path))
+                items.extend(_scan_files_recursive(entry.path, rel_path))
             else:
                 # Get file extension
                 ext = os.path.splitext(entry.name)[1].lstrip('.')
@@ -58,6 +70,34 @@ def get_files_recursive(directory: str, base_path: str = "") -> List[FileItem]:
     except PermissionError:
         pass
         
+    return items
+
+
+def get_files_recursive(directory: str) -> List[FileItem]:
+    directory_path = os.path.abspath(directory)
+    if not os.path.exists(directory_path):
+        return []
+
+    try:
+        directory_mtime = os.path.getmtime(directory_path)
+    except OSError:
+        return []
+
+    now = time.time()
+    cached = _file_listing_cache.get(directory_path)
+    if (
+        cached
+        and cached.get("mtime") == directory_mtime
+        and (now - float(cached.get("cached_at", 0))) < FILE_LISTING_CACHE_TTL
+    ):
+        return cached["items"]  # type: ignore[return-value]
+
+    items = _scan_files_recursive(directory_path)
+    _file_listing_cache[directory_path] = {
+        "items": items,
+        "mtime": directory_mtime,
+        "cached_at": now,
+    }
     return items
 
 def get_project_files(project_path: str, output_type: str) -> List[FileItem]:

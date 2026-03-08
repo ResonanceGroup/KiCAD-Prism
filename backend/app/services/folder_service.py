@@ -11,6 +11,7 @@ import datetime
 import json
 import os
 import shutil
+import time
 import uuid
 from typing import Dict, List, Optional
 
@@ -44,6 +45,11 @@ class FolderTreeItem(BaseModel):
 
 FOLDERS_FILE = os.path.join(project_service.PROJECTS_ROOT, ".folders.json")
 os.makedirs(os.path.dirname(FOLDERS_FILE), exist_ok=True)
+
+FOLDERS_CACHE_TTL = 5.0
+_folders_cache: Dict[str, Folder] = {}
+_folders_cache_time: float = 0
+_folders_cache_mtime: Optional[float] = None
 
 
 def _legacy_folders_files() -> List[str]:
@@ -133,7 +139,21 @@ def _is_folder_visible_to_role(folder: Folder, user_role: Optional[Role]) -> boo
 
 
 def _load_folders() -> Dict[str, Folder]:
+    global _folders_cache, _folders_cache_time, _folders_cache_mtime
     _ensure_canonical_folders_file()
+
+    current_time = time.time()
+    try:
+        current_mtime = os.path.getmtime(FOLDERS_FILE)
+    except OSError:
+        current_mtime = None
+
+    if (
+        _folders_cache
+        and (current_time - _folders_cache_time) < FOLDERS_CACHE_TTL
+        and _folders_cache_mtime == current_mtime
+    ):
+        return _folders_cache
 
     for path in _existing_folders_file_candidates():
         try:
@@ -151,16 +171,33 @@ def _load_folders() -> Dict[str, Folder]:
             if path != FOLDERS_FILE and not os.path.exists(FOLDERS_FILE):
                 _save_folders(folders)
 
+            _folders_cache = folders
+            _folders_cache_time = current_time
+            try:
+                _folders_cache_mtime = os.path.getmtime(FOLDERS_FILE)
+            except OSError:
+                _folders_cache_mtime = current_mtime
             return folders
         except (json.JSONDecodeError, IOError):
             continue
 
+    _folders_cache = {}
+    _folders_cache_time = current_time
+    _folders_cache_mtime = current_mtime
     return {}
+
+
+def invalidate_folder_cache() -> None:
+    global _folders_cache, _folders_cache_time, _folders_cache_mtime
+    _folders_cache = {}
+    _folders_cache_time = 0
+    _folders_cache_mtime = None
 
 
 def _save_folders(folders: Dict[str, Folder]) -> None:
     with open(FOLDERS_FILE, "w", encoding="utf-8") as f:
         json.dump({k: v.dict() for k, v in folders.items()}, f, indent=2)
+    invalidate_folder_cache()
 
 
 def _children_map(folders: Dict[str, Folder]) -> Dict[Optional[str], List[str]]:
