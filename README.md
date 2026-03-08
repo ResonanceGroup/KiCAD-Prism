@@ -1,31 +1,30 @@
 # KiCAD Prism
 
-KiCAD Prism is a modern, high-performance web-based platform designed for visualizing, reviewing, and managing KiCAD projects. It bridges the gap between desktop EDA and collaborative web-native engineering by providing real-time design exploration, threaded design reviews, and automated manufacturing workflows.
+KiCAD Prism is a web platform for browsing, reviewing, and operating on KiCad repositories from the browser. It combines a FastAPI backend, a React/Vite frontend, repository import/sync flows, RBAC-based access control, comments export helpers, and manufacturing/documentation workflows in one workspace.
 
 ![KiCAD Prism Home Page](assets/KiCAD-Prism-Home-Page.png)
 
----
+## Core Capabilities
 
-## Key Features
+### Workspace and Repository Management
 
-### Modern Workspace Management
-
-Manage all your KiCAD repositories in a unified dashboard. Import projects directly from GitHub or GitLab via async jobs with real-time status tracking and detailed logs. Analysis is optimized using blobless, no-checkout clones for near-instant repository scanning. Supports both GitHub Tokens and SSH keys for private repository access.
+- Import standalone KiCad repositories or monorepos that contain multiple boards.
+- Sync repositories from their remotes without leaving the UI.
+- Organize projects into folders with RBAC-aware visibility.
+- Search projects by name, display name, description, and parent repo.
 
 <p align="center">
   <img src="assets/KiCAD-Prism-Workspace.png" width="49%" alt="Workspace Overview">
   <img src="assets/KiCAD-Prism-Importing-Repo.png" width="49%" alt="Importing Repositories">
 </p>
 
-*Unified dashboard with repository management and GitHub import flow.*
+### Project Exploration
 
-### The Visualizer Suite
-
-A comprehensive design explorer that renders schematics and PCBs natively in the browser. Powered by [ecad-viewer](https://github.com/Huaqiu-Electronics/ecad-viewer) and [KiCanvas](https://kicanvas.org), KiCAD Prism provides high-fidelity, interactive exploration of your electronics design files.
-
-- **Schematic & PCB**: Native rendering with cross-probing.
-- **3D Visualization**: Real-time 3D model viewing with adjustable Scene Brightness and Directionality.
-- **Interactive BOM**: Integrated [Interactive HTML BOM](https://github.com/quindorian/Sublime-iBOM-Plugin) suite for assembly and review.
+- Native schematic and PCB viewing in the browser.
+- 3D board viewing and Interactive HTML BOM integration.
+- Markdown README and project docs browsing.
+- Design outputs and manufacturing outputs browsing and download.
+- Project history, releases, and visual diff support.
 
 <p align="center">
   <img src="assets/KiCAD-Prism-Visualizer-SCH.png" width="49%" alt="Schematic Viewer">
@@ -37,226 +36,151 @@ A comprehensive design explorer that renders schematics and PCBs natively in the
   <img src="assets/KiCAD-Prism-Visualizer-ibom.png" width="49%" alt="Interactive BOM">
 </p>
 
-*High-fidelity schematic exploration.*
+### Review and Collaboration
 
-### Collaborative Design Reviews
-
-Move away from disjointed feedback. Add contextual comments directly on design elements. Comments can be replied to, resolved, and are visualised as pins in the design overlay.
+- Comments are stored in SQLite for live collaboration.
+- `.comments/comments.json` can be exported for repository-based workflows.
+- Per-project helper URLs are exposed to configure KiCad REST comment sources.
+- Role-based access control separates viewer, designer, and admin permissions.
 
 <p align="center">
   <img src="assets/KiCAD-Prism-Commenting-Mode.png" width="49%" alt="Commenting Mode">
   <img src="assets/KiCAD-Prism-Comment-Dialog.png" width="49%" alt="Comment Dialog">
 </p>
 
-After a comment is added by the user, the comment is stored in a JSON file at `./comments/comments.json` inside the repository and a pin is placed on the schematic at the location where the comment was added. The pin is visible in the schematic viewer and can be clicked to view the comment.  
-In the Comments Panel, the user can view all the comments and replies in a threaded manner. The user can also reply to a comment and the reply will be stored in the JSON file and can be viewed in the schematic viewer. Clicking on an entry in the comments panel will zoom into the schematic/PCB at the location where the comment was added.
+### Workflow Automation
 
-<p align="center">
-  <img src="assets/KiCAD-Prism-Comments-Panel-Reply.png" width="49%" alt="Comments Panel & Replies">
-  <img src="assets/KiCAD-Prism-Comment-JSON.png" width="49%" alt="Comment JSON">
-</p>
-
-Pressing the Push Comments button will push the latest files in the backend to the remote repository with a commit message.
-
-> Native parsing of comments.json and display of comments in KiCAD is currently NOT available
-Please upvote [this](https://gitlab.com/kicad/code/kicad/-/issues/22918) feature request on Gitlab for a comments panel in KiCAD!
-
-*Threaded design reviews with spatial context.*
-
-### Visual Diff & Design Comparison
-
-Track design changes across commits with native support for Schematics, PCBs, and Bill of Materials. Powered by `kicad-cli`, KiCAD Prism generates visual and structural diffs that highlight exactly what was added, removed, or modified.
-
-- **Visual Comparison**: Toggle between schematic sheets or PCB layers with an opacity-controlled overlay to spot subtle layout shifts.
-- **Asymmetric BoM Diff**: Compare component lists across commits with status-based filtering (Added/Removed/Changed) and support for custom project-level fields via `.prism.json`.
-
-<p align="center">
-  <img src="assets/Visual-Diff-GIF.gif" width="49%" alt="Schematic Visual Diff">
-  <img src="assets/Visual-Diff-PCB-GIF.gif" width="49%" alt="PCB Visual Diff">
-</p>
-
-<p align="center">
-  <img src="assets/Visual-Diff-BoM.gif" width="80%" alt="BoM Structural Diff">
-</p>
-
-*Visual and structural diffing of design and manufacturing data.*
-
-### Integrated Documentation & Assets
-
-Explore design and manufacturing outputs through a specialized assets portal. View project specifications and logs with native markdown support and embedded image handling.
-
-![Assets Portal](assets/KiCAD-Prism-Assets-Portal.png)
-![Markdown Support](assets/KiCAD-Prism-Markdown-Support.png)
-![Documentation Browser](assets/KiCAD-Prism-Documentation.png)
-*Native documentation browsing and asset management.*
-
-### Automated Workflows
-
-Trigger `kicad-cli` powered jobs directly from the browser to generate the latest PDFs, Interactive BOMs, and Ray-Traced renders.
-
-**Customizable Workflows**: Users can add or modify whatever workflows they want by defining new scripts or modifying the existing ones in this project. Results are automatically committed and pushed back to the remote repository if configured.
+- Trigger KiCad workflow jobs from the UI.
+- Generate design, manufacturing, and render outputs.
+- Browse generated artifacts from the project detail page.
 
 ![Workflow Management](assets/KiCAD-Prism-Workflows.png)
 
----
+## Architecture
 
-## Tech Stack
+- Frontend: React, TypeScript, Vite, Tailwind, shadcn/ui
+- Backend: FastAPI, GitPython, Pydantic Settings
+- Storage:
+  - imported repositories under `data/projects`
+  - SSH material under `data/ssh`
+  - role assignments in `.rbac_roles.json`
+  - folder metadata in `.folders.json`
+  - comments in SQLite plus optional `.comments/comments.json` export
+- Runtime split:
+  - Docker frontend serves the production bundle on port `8080`
+  - backend API serves on port `8000`
 
-- **Frontend**: React, Vite, Tailwind CSS, ShadCN UI, Lucide Icons.
-- **Backend**: FastAPI (Python 3.10+), GitPython.
-- **Tools**: `kicad-cli` (v9.0+).
-- **Visualization Core**:
-  - [ecad-viewer](https://github.com/Huaqiu-Electronics/ecad-viewer)
-  - [KiCanvas](https://github.com/thevoidinn/KiCanvas)
-  - [Interactive HTML BOM](https://github.com/quindorian/Sublime-iBOM-Plugin)
-  - [Three.js](https://threejs.org/)
+## Quick Start
 
----
-
-## Getting Started
-
-For detailed installation and server setup, see [DEPLOYMENT.md](./DEPLOYMENT.md).  
-For the expected structure of imported KiCAD projects, see [KICAD-PRJ-REPO-STRUCTURE.md](./KICAD-PRJ-REPO-STRUCTURE.md).
-
-### Quick Start with Docker (Recommended)
-
-The easiest way to run KiCAD Prism is with Docker. This works on any machine with Docker installed.
+### Docker
 
 ```bash
-# Clone the repository
 git clone https://github.com/krishna-swaroop/KiCAD-Prism.git
 cd KiCAD-Prism
-
-# Start the application (no authentication)
-AUTH_ENABLED=false docker compose up -d --build
-
-# OR: Start with Google OAuth + RBAC session auth
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com SESSION_SECRET=change-me docker compose up -d
-
-# Access the UI at http://localhost
+cp .env.example .env
 ```
 
-#### Persistence & Data
+Guest mode:
 
-By default, the Docker setup creates a `./data` folder in the project root:
-
-- `./data/projects`: This is where your KiCAD projects are stored and managed.
-- Files here will persist across `docker compose down` or container updates.
-
-#### Switching Authentication
-
-Authentication is enabled by default in the Docker image but requires a `GOOGLE_CLIENT_ID`.
-
-- **To Disable**: Set `AUTH_ENABLED=false` in your `.env`.
-- **To Enable**: Set `GOOGLE_CLIENT_ID=...` and ensure `AUTH_ENABLED=true` (the default).
-
-To stop: `docker compose down`
-
-#### Setting Up Google OAuth for Docker
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Create or select a project
-3. Create an **OAuth 2.0 Client ID** (Web application type)
-4. Add these **Authorized JavaScript Origins**:
-   - `http://localhost`
-   - `http://localhost:80`
-   - `http://127.0.0.1`
-5. Copy the Client ID and pass it to Docker:
-
-```bash
-# Create a .env file for convenience
-echo "GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" > .env
-echo "AUTH_ENABLED=true" >> .env
-echo "SESSION_SECRET=change-me-to-a-long-random-secret" >> .env
-echo "BOOTSTRAP_ADMIN_USERS_STR=admin@yourcompany.com" >> .env
-
-# Docker Compose automatically reads .env
-docker compose up -d
+```env
+AUTH_ENABLED=false
 ```
 
-### Quick Local Dev Setup
+Google login + RBAC session auth:
+
+```env
+AUTH_ENABLED=true
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+SESSION_SECRET=replace-with-a-long-random-secret
+BOOTSTRAP_ADMIN_USERS_STR=admin@example.com
+SESSION_COOKIE_SECURE=false
+```
+
+Start the stack:
 
 ```bash
-# 1. Backend Setup
+docker compose up --build -d
+```
+
+Open the UI at [http://127.0.0.1:8080](http://127.0.0.1:8080).
+
+Important:
+- `SESSION_SECRET` is required whenever auth is effectively enabled.
+- `SESSION_COOKIE_SECURE=true` should be used only behind HTTPS.
+- Docker Compose reads the root `.env` automatically.
+
+### Local Development
+
+Backend:
+
+```bash
 cd backend
-python3 -m venv venv && source venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
+```
 
-# 2. Frontend Setup (Separate Terminal)
+Frontend in a second terminal:
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
----
+Frontend dev server runs on [http://127.0.0.1:5173](http://127.0.0.1:5173).
 
-## Authentication & Access Control
+By default, local development usually runs without auth because `DEV_MODE=true` and no Google client ID is configured.
 
-KiCAD Prism supports Google Sign-in with role-based access control (RBAC) and optional allowlists.
+## Authentication Model
 
-| Mode | Behavior |
-|------|----------|
-| **Public Gallery** | No login required, projects are read-only. |
-| **Development** | Login shown with Dev Bypass button for local testing. |
-| **Production** | Full Google OAuth required with domain verification. |
+Current auth behavior is session-based:
+
+- frontend reads `/api/auth/config`
+- Google Sign-In exchanges an ID token with `/api/auth/login`
+- backend issues an `HttpOnly` signed session cookie
+- subsequent API calls resolve the current user and role from that cookie
 
 RBAC roles:
-- `viewer`: read-only project access
-- `designer`: project/folder/workflow/comment mutations
-- `admin`: full access + user role management and SSH settings
+- `viewer`: read-only access
+- `designer`: import, sync, comments, folder/project mutations, workflows
+- `admin`: full access, including settings and role management
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md#authentication-setup) for configuration details.
+Auth is effectively enabled only when all of the following are true:
+- `AUTH_ENABLED=true`
+- `GOOGLE_CLIENT_ID` is set
+- `DEV_MODE=false`
 
----
+## Project Documentation
 
-## Project Structure
+- Deployment and hosting: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)
+- Repository layout expectations: [docs/KICAD-PRJ-REPO-STRUCTURE.md](./docs/KICAD-PRJ-REPO-STRUCTURE.md)
+- Path mapping and `.prism.json`: [docs/PATH-MAPPING.md](./docs/PATH-MAPPING.md)
+- Display names and project metadata: [docs/CUSTOM_PROJECT_NAMES.md](./docs/CUSTOM_PROJECT_NAMES.md)
+- Comments export and REST helpers: [docs/COMMENTS-COLLAB-UPDATES.md](./docs/COMMENTS-COLLAB-UPDATES.md)
+- Workspace behavior notes: [docs/WORKSPACE_UX_IMPROVEMENTS.md](./docs/WORKSPACE_UX_IMPROVEMENTS.md)
+- Visualizer vendor sync notes: [docs/ECAD_VIEWER_SYNC_NOTES.md](./docs/ECAD_VIEWER_SYNC_NOTES.md)
+
+## Repository Layout
 
 ```text
 KiCAD-Prism/
 ├── backend/            # FastAPI backend
-│   ├── app/            # API & Service Layer
-│   └── requirements.txt
 ├── frontend/           # React frontend
-│   ├── src/            # Components, Hooks, Views
-│   └── package.json
-└── assets/             # Branding & Showcase media
+├── docs/               # Project documentation
+├── assets/             # Screenshots and media for docs
+└── data/               # Runtime data in local/Docker use
 ```
-
----
-
-## Roadmap
-
-- [x] High-performance Schematic & PCB Viewers
-- [x] Collaborative Threaded Design Review
-- [x] Automated Workflow Generation
-- [x] Visual Git Diff (Native kicad-cli integration)
-- [x] Fix page transition logic completely
-- [x] Refine Workspace UI and handle non-GitHub Imports better
-- [ ] Fix ecad-viewer bugs for small projects
-- [ ] KiCAD Plugin/source code edits to overlay comments on the schematic and PCB editors
-- [ ] User Permissions & Role-Based Access
-- [ ] Real-time Collaboration (WebSockets)
-- [ ] Inventree/PartDB Integration
-
----
 
 ## Acknowledgements
 
-Built with care for the open-source hardware community. Special thanks to the teams behind:
-
-- [ecad-viewer](https://github.com/Huaqiu-Electronics/ecad-viewer) for the core visualization engine.
-- [KiCanvas](https://kicanvas.org) for native schematic rendering.
-- [Interactive HTML BOM](https://github.com/quindorian/Sublime-iBOM-Plugin) for the assembly suite.
-- [Three.js](https://threejs.org/) for the 3D model viewer.
-- [FastAPI](https://fastapi.tiangolo.com/) for the high-performance backend.
-
----
+- [ecad-viewer](https://github.com/Huaqiu-Electronics/ecad-viewer)
+- [KiCanvas](https://kicanvas.org)
+- [Interactive HTML BOM](https://github.com/quindorian/Sublime-iBOM-Plugin)
+- [Three.js](https://threejs.org/)
+- [FastAPI](https://fastapi.tiangolo.com/)
 
 ## License
 
 This project is licensed under the Apache-2.0 License.
-
-## Contributing
-
-Most of the components have been vibe-coded to prove that the project is capable of being developed and is useful for teams working on KiCAD projects. I would love to see actual Typescript devs contribute to this project and make it production ready.

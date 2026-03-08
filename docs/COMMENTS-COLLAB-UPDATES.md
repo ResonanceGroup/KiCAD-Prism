@@ -1,154 +1,79 @@
-# Comments Collaboration Updates
+# Comments Collaboration Model
 
-This document summarizes recent improvements to KiCAD-Prism comment handling for both REST and local artifact workflows.
+This document describes the current comments architecture in KiCAD Prism.
 
-## Overview
+## Current Behavior
 
-The comments system now uses a database-first model for live collaboration, and generates `.comments/comments.json` as an export artifact when requested.
+Comments are database-backed for live application use.
 
-- Source of truth for comments/replies: SQLite
-- Artifact for KiCad/local Git workflow: `.comments/comments.json`
-- REST URL helpers are available per project and now include reply URL templates
+- source of truth: SQLite comment store
+- export artifact: `.comments/comments.json` inside the project repository
+- REST helper URLs are generated per project so KiCad or external tooling can target the correct API endpoints
 
-## Backend Changes
+The export action generates the JSON artifact. Git commit and push operations remain a separate user workflow.
 
-### 1) Database-backed comment store
+## Backend Model
 
-Implemented `CommentsStoreService` in:
+### Storage
 
-- `backend/app/services/comments_store_service.py`
-
-Key behavior:
-
-- Stores comments and replies in SQLite with per-project isolation (`project_id`)
-- Imports existing `.comments/comments.json` once per project (bootstrap)
-- Supports CRUD operations for comments and replies
-- Exports DB snapshot to `.comments/comments.json` atomically
-
-### 2) Comments API refactor
-
-Updated:
-
-- `backend/app/api/comments.py`
+`CommentsStoreService` keeps comments and replies in SQLite with per-project isolation.
 
 Key behavior:
+- bootstraps from an existing `.comments/comments.json` once when needed
+- supports comment create, update, reply, and delete operations
+- exports JSON atomically back into the repository
 
-- `GET /api/projects/{project_id}/comments` reads DB snapshot
-- `POST /api/projects/{project_id}/comments` creates comment in DB
-- `PATCH /api/projects/{project_id}/comments/{comment_id}` updates status
-- `POST /api/projects/{project_id}/comments/{comment_id}/replies` adds reply
-- `DELETE /api/projects/{project_id}/comments/{comment_id}` deletes comment
-- `POST /api/projects/{project_id}/comments/push` now only exports JSON artifact
+### API Surface
 
-Important: export endpoint no longer commits or pushes to Git. Users handle Git operations themselves.
+Comments endpoints live under `/api/projects/{project_id}`:
 
-### 3) URL helper service
+- `GET /comments`
+- `POST /comments`
+- `PATCH /comments/{comment_id}`
+- `POST /comments/{comment_id}/replies`
+- `DELETE /comments/{comment_id}`
+- `POST /comments/push`
 
-Implemented:
+`POST /comments/push` now means export the current DB-backed state to `.comments/comments.json`. It does not perform a Git push.
 
-- `backend/app/services/comments_url_service.py`
+### Helper URLs
 
-Updated:
+`GET /api/projects/{project_id}/comments/source-urls` returns helper URLs for external integration:
 
-- `backend/app/api/projects.py`
+- `list_url`
+- `patch_url_template`
+- `reply_url_template`
+- `delete_url_template`
 
-Key behavior:
+Base URL resolution priority:
+1. explicit `base_url` query parameter
+2. `COMMENTS_API_BASE_URL`
+3. request host and forwarded headers
 
-- `GET /api/projects/{project_id}/comments/source-urls` returns:
-  - `list_url`
-  - `patch_url_template`
-  - `reply_url_template`
-  - `delete_url_template`
-- Supports URL base resolution priority:
-  1. `base_url` query param
-  2. `COMMENTS_API_BASE_URL` env setting
-  3. incoming request host/protocol (including forwarded headers)
+## Frontend Behavior
 
-### 4) Startup initialization
+Current UI behavior includes:
+- import dialog shows comment-source helper URLs after import
+- visualizer exposes the same URLs through a persistent popover
+- users can copy list, patch, reply, and delete templates directly
+- export action is labeled `Generate JSON`
 
-Updated:
+## Hosting Notes
 
-- `backend/app/main.py`
+### LAN or remote access
 
-The comments DB is initialized at backend startup.
+If users or tools connect from another machine, helper URLs must resolve to a reachable backend host.
 
-### 5) Configuration
+Use either:
+- `COMMENTS_API_BASE_URL=http://reachable-host:8000`
+- or access the backend using the same host/IP that external clients will use, so request-derived URLs are correct
 
-Updated:
+### Repository workflow
 
-- `backend/app/core/config.py`
+After generating `.comments/comments.json`, use normal Git commands to stage, commit, and push the artifact if you want it versioned in the repository.
 
-Added/updated config:
+## Recommended Usage
 
-- `COMMENTS_API_BASE_URL` (optional)
-  - If set, helper URLs use this base (recommended for fixed LAN setups)
-  - If empty, backend derives base URL from request host/IP
-
-## Frontend Changes
-
-### 1) Import dialog URL helpers
-
-Updated:
-
-- `frontend/src/components/import-dialog.tsx`
-
-Now displays all four REST fields after import:
-
-- List URL
-- Patch URL Template
-- Reply URL Template
-- Delete URL Template
-
-### 2) Visualizer REST helper UX
-
-Updated:
-
-- `frontend/src/components/visualizer.tsx`
-
-Changes:
-
-- Replaced fragile hover tooltip with persistent popover UI
-- Added copy buttons for each URL field
-- Included reply URL template display
-
-### 3) Comment rendering and mode fixes
-
-Updated:
-
-- `frontend/src/components/visualizer.tsx`
-- `frontend/src/components/comment-overlay.tsx`
-- `frontend/src/components/comment-form.tsx`
-
-Fixes:
-
-- Correct SCH/PCB overlay filtering by active tab context
-- Prevent comment context drift when switching tabs
-- Keep comment-mode behavior consistent across tab changes
-- Ensure add-comment dialog appears above overlays (z-index layering fix)
-
-### 4) Export action naming
-
-Updated:
-
-- `frontend/src/components/visualizer.tsx`
-
-`Push Comments` action is now labeled `Generate JSON` and triggers artifact export only.
-
-## Operational Notes
-
-### LAN hosting behavior
-
-For users on other machines in the same network:
-
-- Set `COMMENTS_API_BASE_URL` to a reachable host (example: `http://192.168.1.42:8000`), or
-- Leave it empty and access backend via LAN IP so request-derived URL helpers are correct
-
-### Git workflow
-
-After pressing `Generate JSON`, use normal Git commands to stage/commit/push `.comments/comments.json` as needed.
-
-## Validation
-
-- Frontend build passes (`npm run build`)
-- Backend touched modules compile (`py_compile`)
-- Existing lint config issue remains unrelated (`eslint.config.js` recommended preset error)
+- use the web UI and SQLite store for normal collaboration
+- generate `.comments/comments.json` when you need a repository artifact for downstream tools or KiCad-side workflows
+- keep backend URL generation explicit with `COMMENTS_API_BASE_URL` when deploying behind LAN IPs, reverse proxies, or non-default hosts

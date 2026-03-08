@@ -1,170 +1,105 @@
-# Custom Project Names Feature
+# Custom Project Names and Metadata
 
-## Overview
+KiCAD Prism supports project-level display metadata through `.prism.json` and related API endpoints.
 
-This feature allows users to set custom display names for their KiCAD projects that override the default folder names throughout the KiCAD-Prism interface.
+## What Is Configurable
 
-## How It Works
+Current project metadata fields include:
+- `project_name`: display name shown in the UI
+- `description`: project description shown in workspace and detail views
 
-### Backend Implementation
+These fields live alongside path mappings in `.prism.json`.
 
-1. **Extended `.prism.json` Schema**
-   - Added optional `project_name` field at the top level
-   - Maintains backward compatibility with existing files
+Example:
 
-2. **Path Config Service Updates**
-   - `PathConfig` model now includes `project_name: Optional[str]`
-   - `get_project_display_name()` function retrieves custom names
-   - `save_path_config()` handles both paths and project names
-
-3. **API Endpoints**
-   - `GET /api/projects/{id}/name` - Get current project name
-   - `PUT /api/projects/{id}/name` - Update project name
-   - Enhanced project listing to include `display_name` field
-
-4. **Project Service Integration**
-   - `get_registered_projects()` now includes custom names
-   - Monorepo structure API supports custom names
-   - Maintains fallback to folder names
-
-### Frontend Implementation
-
-1. **TypeScript Interfaces**
-   - `Project` interface includes `display_name?: string`
-   - `MonorepoProject` interface includes `display_name?: string`
-   - `PathConfig` interface includes `projectName?: string`
-
-2. **Component Updates**
-   - **Workspace**: Uses custom names in project cards and search
-   - **Project Cards**: Display custom names with fallback
-   - **Project Detail Page**: Shows custom name in title
-   - **Path Config Dialog**: Added project name editing field
-
-3. **API Integration**
-   - `project-name-api.ts` service for name management
-   - `project-name-editor.tsx` component for editing (standalone)
-   - Integrated name editing into existing Path Config Dialog
-
-## Usage
-
-### Setting Custom Names
-
-1. **Via Path Config Dialog** (Recommended)
-   - Open any project
-   - Click "Paths" button to open Project Settings
-   - Enter custom name in "Project Name" field
-   - Click "Save Configuration"
-
-2. **Via `.prism.json` File** (Manual)
-   ```json
-   {
-     "project_name": "My Custom Project Name",
-     "paths": {
-       "schematic": "*.kicad_sch",
-       "pcb": "*.kicad_pcb",
-       "designOutputs": "Design-Outputs",
-       "manufacturingOutputs": "Manufacturing-Outputs",
-       "documentation": "docs",
-       "thumbnail": "assets/thumbnail",
-       "readme": "README.md",
-       "jobset": "Outputs.kicad_jobset"
-     }
-   }
-   ```
-
-### Name Resolution Priority
-
-1. **Custom name** from `.prism.json` `project_name` field
-2. **KiCAD filename** for Type-2 imports (`.kicad_pro` filename)
-3. **Folder name** as fallback (existing behavior)
-4. **Repository name** for Type-1 imports
-
-## Features
-
-### Implemented Features
-
-- **Custom Project Names**: Set display names via `.prism.json`
-- **UI Integration**: Edit names through Path Config Dialog
-- **Search Support**: Custom names are searchable
-- **Monorepo Support**: Works with subprojects
-- **Backward Compatibility**: Existing projects unchanged
-- **Fallback System**: Graceful degradation to folder names
-- **Real-time Updates**: Changes reflect immediately
-
-### API Endpoints
-
-#### Get Project Name
-```http
-GET /api/projects/{project_id}/name
-```
-
-Response:
 ```json
 {
-  "display_name": "Custom Name",
-  "fallback_name": "folder-name"
+  "project_name": "Power Distribution Board",
+  "description": "48 V input board for lab power routing.",
+  "paths": {
+    "schematic": "board.kicad_sch",
+    "pcb": "board.kicad_pcb",
+    "designOutputs": "Design-Outputs",
+    "manufacturingOutputs": "Manufacturing-Outputs",
+    "documentation": "docs",
+    "thumbnail": "assets/thumbnail",
+    "readme": "README.md",
+    "jobset": "Outputs.kicad_jobset"
+  }
 }
 ```
 
-#### Update Project Name
+## Resolution Rules
+
+Display name resolution uses this order:
+1. `.prism.json` `project_name`
+2. imported project display name from registry
+3. project folder or repo-derived fallback name
+
+Description resolution uses this order:
+1. `.prism.json` `description`
+2. registry description
+3. backend fallback such as `Project <name>`
+
+## Primary API
+
+The main settings flow is the config endpoint:
+
+### Get effective config
+
 ```http
-PUT /api/projects/{project_id}/name
+GET /api/projects/{project_id}/config
+```
+
+Returns:
+- `config`: effective configuration, including `project_name` and `description`
+- `resolved`: resolved absolute paths
+- `source`: `explicit` or `auto-detected`
+
+### Update config
+
+```http
+PUT /api/projects/{project_id}/config
 Content-Type: application/json
 
 {
-  "display_name": "New Custom Name"
+  "project_name": "Power Distribution Board",
+  "description": "48 V input board for lab power routing.",
+  "schematic": "board.kicad_sch",
+  "pcb": "board.kicad_pcb"
 }
 ```
 
-Response:
-```json
-{
-  "display_name": "New Custom Name",
-  "message": "Project name updated successfully"
-}
+This is the preferred path for project settings because it updates metadata and path mapping together.
+
+## Compatibility Endpoints
+
+Separate name endpoints still exist for compatibility:
+
+```http
+GET /api/projects/{project_id}/name
+PUT /api/projects/{project_id}/name
 ```
 
+They remain useful for narrow integrations, but the main UI now prefers the config endpoint.
 
-## Migration Notes
+## UI Behavior
 
-### For Existing Projects
-- No action required - projects continue to work with folder names
-- Custom names are completely optional
+Current frontend behavior:
+- workspace cards and search use `display_name` when present
+- project detail header uses the resolved display name from project detail/overview payloads
+- project settings dialog edits `project_name`, `description`, and paths together
 
-### For New Projects
-- Consider adding `project_name` to `.prism.json` during project setup
-- Use descriptive names for better project identification
+## Why Explicit Metadata Helps
 
-## Troubleshooting
+Using `.prism.json` metadata has two practical benefits:
+- clearer labels for monorepo subprojects and imported repos
+- less ambiguity when several folders have similar technical filenames
 
-### Common Issues
+It also avoids relying on inferred names from repository structure alone.
 
-1. **Custom name not showing**
-   - Check `.prism.json` syntax
-   - Verify `project_name` field is at top level
-   - Refresh project page
+## Recommendations
 
-2. **Name not persisting**
-   - Ensure Path Config Dialog saves successfully
-   - Check file permissions on project directory
-   - Verify backend API responses
-
-3. **Search not working**
-   - Clear browser cache
-   - Check frontend build includes latest changes
-   - Verify API returns display names
-
-## Future Enhancements
-
-### Potential Improvements
-- [ ] Bulk rename projects
-- [ ] Project name templates
-- [ ] Name validation rules
-- [ ] Import/export project names
-- [ ] Name history/undo functionality
-
----
-
-**Version**: 1.0  
-**Last Updated**: 2025-02-09  
-**Compatible**: KiCAD-Prism v0.0.0+
+- set `project_name` for any project whose folder name is not presentation-friendly
+- keep `description` short and task-oriented so workspace search remains useful
+- treat `.prism.json` as the canonical place for project-specific display metadata

@@ -1,190 +1,273 @@
 # Deployment Guide
 
-This guide provides instructions for setting up KiCAD Prism. The **easiest and recommended** way is using Docker.
+This document covers the current KiCAD Prism deployment model for Docker hosting and local development.
 
----
+## Runtime Overview
 
-## 1. Quick Start: Docker Deployment (Recommended)
+KiCAD Prism runs as two services:
 
-Docker packages both the frontend and the backend (with `kicad-cli` v9 pre-installed) into a portable environment. This works on Windows, macOS (including Apple Silicon), and Linux.
+- `backend`: FastAPI API server on port `8000`
+- `frontend`: production Vite bundle served by Nginx on port `8080`
+
+In Docker, the frontend proxies `/api/*` requests to the backend over the Compose network.
+
+Default local endpoints:
+- UI: [http://127.0.0.1:8080](http://127.0.0.1:8080)
+- API: [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+## Docker Hosting
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
+- Docker Engine or Docker Desktop
+- Docker Compose support
+- enough disk space for imported repositories and generated outputs
 
-### Installation
+### 1. Clone the repository
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/krishna-swaroop/KiCAD-Prism.git
 cd KiCAD-Prism
-
-# 2. Start the platform
-docker compose up -d --build
 ```
 
-> `docker compose up -d` will automatically build the images the first time. Using the `--build` flag ensures that any local changes to the `Dockerfile` or source code are re-built into the images.
+### 2. Create the root `.env`
 
-Access the UI at: **`http://localhost`**
-
-### Volume Mapping & Persistence
-
-By default, Docker creates a `data` directory in the repository root to store persistent data:
-
-- **`./data/projects`**: This is where your KiCAD repositories are stored.
-- **Data Survival**: Your projects remain available even if you stop or update the containers.
-- **Manual Import**: You can clone existing KiCAD project repositories into `./data/projects` on your host machine, and they will appear in the dashboard.
-
----
-
-## 2. Environment Configuration
-
-For Docker deployments, you **must** create a `.env` file in the **root directory** of the project (where `docker-compose.yml` is located).
-
-### Example .env File
-
-Place this at the root of the `KiCAD-Prism/` directory:
+Docker Compose reads the repository root `.env` automatically.
 
 ```bash
-# --- .env (Project Root) ---
+cp .env.example .env
+```
 
-# [AUTH] Force authentication toggle
-# Set to 'false' for public gallery mode
+Baseline authenticated configuration:
+
+```env
+WORKSPACE_NAME=KiCAD Prism
 AUTH_ENABLED=true
-
-# [AUTH] Google OAuth Configuration
-GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
-
-# [AUTH] Access Control
-ALLOWED_DOMAINS_STR=yourcompany.com
-ALLOWED_USERS_STR=admin@yourcompany.com
-
-# [CONFIG] Development Mode
-# Set to 'false' for production (enforces login)
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+SESSION_SECRET=replace-with-a-long-random-secret
+SESSION_TTL_HOURS=12
+SESSION_COOKIE_SECURE=false
+ALLOWED_USERS_STR=
+ALLOWED_DOMAINS_STR=
+BOOTSTRAP_ADMIN_USERS_STR=admin@example.com
+GITHUB_TOKEN=
 DEV_MODE=false
-
-# [GIT] Private Repository Access (Optional)
-# Enter your GitHub Personal Access Token (classic) to enable 
-# sync and import for private repositories. Note: This is an 
-# optional override; SSH keys are the recommended way for 
-# private repository access.
-GITHUB_TOKEN=ghp_your_secret_token_here
 ```
 
-### Accessing Private/Organizational Repos
+Generate a session secret with:
 
-If you need KiCAD Prism to interact with private repositories:
-
-1. Generate a **Personal Access Token (classic)** on GitHub with the `repo` scope.
-2. If using an Organizational repo, ensure you click **"Configure SSO"** next to the token and authorize your organization.
-3. Add the token to your `.env` as shown above.
-4. Restart your containers: `docker compose up -d`.
-
-The backend will automatically configure Git to use this token for all `https://github.com` operations.
-
----
-
-## 3. Multi-Provider Git Support (GitLab, Bitbucket, etc.)
-
-KiCAD Prism is provider-agnostic. While it has dedicated support for GitHub Tokens, it also supports **SSH Keys**, which is the recommended way to interact with GitLab, Bitbucket, or self-hosted Git instances.
-
-### Using the SSH Setup Wizard (Recommended)
-
-1. Open the KiCAD Prism UI and go to the **Workspace**.
-2. Click the **Settings (Gear icon)** in the top right.
-3. Under the **Git & SSH** tab, if no key is present, click **Generate New SSH Key**.
-4. Copy the generated **Public Key**.
-5. Add this key to your Git provider (e.g., GitHub Settings -> SSH and GPG keys -> New SSH Key).
-6. You can now import projects using SSH URLs (e.g., `git@github.com:user/repo.git`).
-
-### Manual Docker Configuration for SSH
-
-To ensure your SSH keys persist across container restarts, you must mount a volume for the `.ssh` directory in your `docker-compose.yml`:
-
-```yaml
-services:
-  backend:
-    volumes:
-      - ./data/ssh:/root/.ssh:rw
+```bash
+python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(48))
+PY
 ```
 
-> [IMPORTANT]
-> The setup wizard requires the volume to be mapped with read-write (`:rw`) permissions so it can generate and store the keys.
+Important:
+- `SESSION_SECRET` is required whenever auth is effectively enabled.
+- `SESSION_COOKIE_SECURE=true` should be used only behind HTTPS.
+- `DEV_MODE` should stay `false` in Docker hosting.
 
----
+### 3. Start the stack
 
-## 4. Local Development (Manual Setup)
+```bash
+docker compose up --build -d
+```
 
-If you want to contribute to the code or run without Docker, follow these steps.
+Open the UI at [http://127.0.0.1:8080](http://127.0.0.1:8080).
 
-### Prerequisites
+### 4. Stop the stack
 
-1. **Python 3.10+**
-2. **Node.js v18+ & NPM**
-3. **KiCAD 9.0** (with `kicad-cli` in your PATH)
+```bash
+docker compose down
+```
 
-### Backend Setup
+## Docker Volumes and Persistence
+
+Current Compose mounts:
+
+- `./data/projects` -> `/app/projects`
+- `./data/ssh` -> `/root/.ssh`
+
+Persisted data includes:
+- imported repositories
+- `.project_registry.json`
+- `.rbac_roles.json`
+- `.folders.json`
+- exported comments JSON inside repos when generated
+- SSH keys and `known_hosts`
+
+## Authentication Modes
+
+### Guest Mode
+
+```env
+AUTH_ENABLED=false
+GOOGLE_CLIENT_ID=
+SESSION_SECRET=
+DEV_MODE=false
+```
+
+Behavior:
+- login wall is disabled
+- backend serves a guest viewer session
+- write operations still require privileged roles, so this mode is best for public read-only use
+
+### Google Login + Session Auth
+
+```env
+AUTH_ENABLED=true
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+SESSION_SECRET=your-random-secret
+DEV_MODE=false
+```
+
+Behavior:
+- frontend shows the Google sign-in screen
+- backend verifies the Google ID token
+- backend issues an `HttpOnly` signed session cookie
+- RBAC role resolution uses stored assignments plus bootstrap admins
+
+### Local Dev Bypass
+
+```env
+AUTH_ENABLED=true
+GOOGLE_CLIENT_ID=
+SESSION_SECRET=
+DEV_MODE=true
+```
+
+Behavior:
+- auth is effectively disabled because the backend only enables auth when `AUTH_ENABLED=true`, `GOOGLE_CLIENT_ID` is set, and `DEV_MODE=false`
+- this is convenient for local backend/frontend development
+
+## Google OAuth Setup
+
+Create a Google OAuth client of type "Web application" and add the frontend origins you actually use.
+
+Typical origins:
+- local frontend dev: `http://127.0.0.1:5173`
+- local Docker frontend: `http://127.0.0.1:8080`
+- production: `https://your-domain.example`
+
+Use the client ID value in `GOOGLE_CLIENT_ID`.
+
+If your production deployment is HTTPS, also set:
+
+```env
+SESSION_COOKIE_SECURE=true
+```
+
+## Private Repository Access
+
+KiCAD Prism supports two normal approaches.
+
+### SSH
+
+Recommended for long-lived hosted deployments.
+
+- SSH material persists under `./data/ssh`
+- backend startup ensures `~/.ssh` exists and scans common Git hosts into `known_hosts`
+- add the generated or mounted public key to your Git host account
+
+### GitHub Personal Access Token
+
+If you use HTTPS cloning for private GitHub repositories, set:
+
+```env
+GITHUB_TOKEN=your_token_here
+```
+
+The backend configures Git URL rewriting at startup so GitHub HTTPS operations can use the token.
+
+## Local Development Hosting
+
+### Backend
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-
-# Create backend .env
-cp .env.example .env
-
-# Run server
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend Setup
+Notes:
+- backend settings also support a backend-local `.env`
+- if nothing is configured, local dev defaults generally keep auth off because `DEV_MODE=true`
+
+### Frontend
 
 ```bash
 cd frontend
 npm install
-
-# Create frontend .env
-cp .env.example .env
-
-# Run dev server
 npm run dev
 ```
 
-> **Note**: For local development, `.env` files must be placed inside the `backend/` and `frontend/` directories respectively.
+Frontend dev URL:
+- [http://127.0.0.1:5173](http://127.0.0.1:5173)
 
----
+## Operational Notes
 
-## 5. Authentication Setup (Google OAuth)
+### Rebuild after env or frontend changes
 
-KiCAD Prism supports optional Google Sign-in with domain restrictions.
+```bash
+docker compose up --build -d
+```
 
-### Configuring Google Cloud
+### Inspect logs
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create an **OAuth 2.0 Client ID** (Web application type)
-3. Add these Authorized JavaScript Origins:
-   - Development: `http://localhost:5173`
-   - Production/Docker: `http://localhost`
-4. Copy the **Client ID** to your `.env` file.
+```bash
+docker compose logs --tail=100 frontend
+docker compose logs --tail=100 backend
+```
 
-### Configuration Modes
+### Session behavior
 
-| Mode | Behavior | Configuration |
-|------|----------|---------------|
-| **Public Gallery** | No login required | `AUTH_ENABLED=false` |
-| **Development** | Login with "Dev Bypass" | `DEV_MODE=true` |
-| **Production** | Strict Google Login | `DEV_MODE=false` |
+- changing `SESSION_SECRET` invalidates all existing sessions
+- secure cookies require HTTPS and will not work correctly on plain HTTP if `SESSION_COOKIE_SECURE=true`
 
----
+## Troubleshooting
 
-## 6. Troubleshooting
+### Blank page with frontend bundle errors
 
-| Issue | Solution |
-| :--- | :--- |
-| **Docker pull fails** | Check your internet connection and ensure you are using the correct image tag (e.g., `kicad/kicad:9.0.0-arm64` for Mac M1/M2). |
-| **Visual Diff Empty** | Check `docker logs kicad-prism-backend` to ensure `kicad-cli` is running correctly. |
-| **Persistence Issues** | Ensure the `./data/projects` folder has write permissions for the Docker user. |
-| **Auth Rejection** | Verify that `GOOGLE_CLIENT_ID` matches in both backend and frontend configs. |
-| **Sync Fails** | Ensure the server/container has network access to the remote Git repository. |
+If the browser shows a blank page, open DevTools and check the first JavaScript error.
+
+A previously observed production issue came from unsafe manual chunk splitting. If a bundle regression returns, rebuild and verify that:
+- `/assets/index-*.js` loads successfully
+- `/api/auth/config` returns `200`
+- the first console error is captured before reloading again
+
+### `SESSION_SECRET is not configured`
+
+Cause:
+- auth is enabled but `SESSION_SECRET` is empty
+
+Fix:
+- set `SESSION_SECRET` in the root `.env`
+- rebuild/restart the stack
+
+### Google sign-in not appearing
+
+Check:
+- `AUTH_ENABLED=true`
+- `GOOGLE_CLIENT_ID` is set
+- `DEV_MODE=false`
+- browser origin is listed in the Google OAuth configuration
+
+### Login works but API requests fail after deploy
+
+Check:
+- `SESSION_COOKIE_SECURE` matches your transport mode
+- HTTPS termination is configured correctly if using secure cookies
+- browser is not blocking cookies for the deployed origin
+
+### Imported repositories disappear after restart
+
+Check that `./data/projects` is mounted and writable on the host.
+
+## Related Docs
+
+- [../README.md](../README.md)
+- [./KICAD-PRJ-REPO-STRUCTURE.md](./KICAD-PRJ-REPO-STRUCTURE.md)
+- [./PATH-MAPPING.md](./PATH-MAPPING.md)

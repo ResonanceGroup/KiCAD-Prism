@@ -1,77 +1,89 @@
 # KiCAD Project Repository Structure
 
-To ensure full compatibility with the KiCAD-Prism platform (including visualizers and automated workflows), board project repositories should follow this standardized folder layout.
+KiCAD Prism works with flexible repository layouts, but projects are easiest to operate when a few conventions are followed.
 
-## Root Directory
+This document describes the recommended layout, not a hard requirement. If your repo differs, use `.prism.json` path mapping as described in [PATH-MAPPING.md](./PATH-MAPPING.md).
 
-| File/Folder | Purpose |
-|--------------|----------|
-| `BoardName.kicad_pro` | Main KiCAD project file |
-| `BoardName.kicad_sch` | Root schematic file |
-| `BoardName.kicad_pcb` | PCB layout file |
-| `Outputs.kicad_jobset` | **Required** for KiCAD Prism Workflows View |
-| `README.md` | Board overview and specifications |
-| `Subsheets/` | Directory for all hierarchical schematic subsheets |
-| `assets/` | Images and renders for documentation |
-| `docs/` | Board datasheets, ICDs, and test guides |
-| `simulation/` | Simulation files and results |
+## Recommended Root Contents
 
----
+| File or Folder | Purpose |
+| --- | --- |
+| `BoardName.kicad_pro` | Main KiCad project file |
+| `BoardName.kicad_sch` | Root schematic |
+| `BoardName.kicad_pcb` | PCB layout |
+| `Outputs.kicad_jobset` | Workflow definition used by KiCAD Prism jobs |
+| `README.md` | Project overview shown in the Overview tab |
+| `Subsheets/` | Optional schematic subsheets |
+| `docs/` | Optional markdown documentation tree |
+| `assets/` | Images, thumbnails, renders |
+| `Design-Outputs/` | Generated design artifacts |
+| `Manufacturing-Outputs/` | Generated fabrication artifacts |
 
-## Repository Structure Visualization
+## Recommended Example Layout
 
 ```text
 Board-Project-Repo/
-├── BoardName.kicad_pro       # Main project file
-├── BoardName.kicad_sch       # Root schematic
-├── BoardName.kicad_pcb       # PCB layout
-├── Outputs.kicad_jobset        # Workflow configuration
-├── README.md                   # Documentation hub
-├── Subsheets/                  # All secondary schematic files
-│   └── sheet_name.kicad_sch
-├── assets/                     # Visual assets (renders, images)
-│   ├── images.png
-│   ├── renders/Top-View.png
-│   ├── renders/Bottom-View.png
-│   └── thumbnail/BoardName-Blender-Render.png # Used as Project thumbnail in KiCAD Prism
-├── docs/                       # Project documentation (ICDs, Bring-up logs)
-├── simulation/                 # Simulation files (SPICE, etc.)
-├── Design-Outputs/             # Auto-generated reference outputs (Workflows)
+├── BoardName.kicad_pro
+├── BoardName.kicad_sch
+├── BoardName.kicad_pcb
+├── Outputs.kicad_jobset
+├── README.md
+├── Subsheets/
+│   └── power-sheet.kicad_sch
+├── assets/
+│   ├── images/
+│   ├── renders/
+│   └── thumbnail/
+├── docs/
+│   ├── bringup.md
+│   └── manufacturing-notes.md
+├── Design-Outputs/
 │   ├── BoardName.pdf
-│   ├── 3DModel/BoardName.glb
-│   ├── 3DModel/BoardName.step
 │   ├── BoardName_iBoM.html
-│   ├── BoardName.pdf
-│   ├── BoardName.csv
-│   └── BoardName.net
-│   
-└── Manufacturing-Outputs/      # Auto-generated fabrication outputs (Workflows)
+│   └── 3DModel/
+└── Manufacturing-Outputs/
     ├── Gerbers/
-    └── BOM/
+    ├── BOM/
+    └── XY-Data/
 ```
 
-## Sub-Directories
+## How KiCAD Prism Uses These Paths
 
-### `Subsheets/`
+- Overview tab reads `README.md` or another configured readme path
+- Documentation tab reads the configured docs directory recursively
+- Assets and downloads surfaces read configured design/manufacturing output directories
+- workflow jobs look for the configured jobset file
+- thumbnails are resolved from the configured thumbnail directory
 
-Contains all hierarchical schematic pages (`.kicad_sch`) except for the root schematic. This keeps the root directory clean and allows KiCAD Prism to find subsheets automatically.
+## Flexible Layout Support
 
-### `Design-Outputs/`
+KiCAD Prism does not require this exact shape.
 
-This folder is automatically managed by the **Workflows** feature in KiCAD Prism. It typically contains:
+If your repository uses different names, define them in `.prism.json`, for example:
 
-- `BoardName.pdf`: Full schematic PDF.
-- `BoardName_iBoM.html`: Interactive BOM.
-- `3DModel/BoardName.step`: PCB 3D model.
+```json
+{
+  "paths": {
+    "schematic": "hardware/main.kicad_sch",
+    "pcb": "hardware/main.kicad_pcb",
+    "documentation": "wiki",
+    "designOutputs": "out/design",
+    "manufacturingOutputs": "out/mfg",
+    "thumbnail": "media/thumbs",
+    "readme": "docs/overview.md",
+    "jobset": "ci/Outputs.kicad_jobset"
+  }
+}
+```
 
-### `Manufacturing-Outputs/`
+## Recommendations for Smooth Operation
 
-This folder is also managed by the **Workflows** feature and contains fabrication-ready files:
+- keep one clear root schematic and one clear PCB path per project
+- store generated outputs in stable directories so users know where to find artifacts
+- keep documentation in markdown if you want it rendered directly in the UI
+- put thumbnail images in a dedicated subdirectory so selection is predictable
+- use `.prism.json` instead of relying on auto-detection when a repo is non-standard
 
-- `Gerbers/`: Gerber and drill files.
-- `BOM/`: Precise manufacturing BOMs.
-- `XY-Data/`: Pick-and-place files.
+## Monorepos
 
-### `docs/`
-
-This folder is managed by the **Documentation** feature in KiCAD Prism. Typically contains markdown files detailing various aspects of the board.
+For monorepo imports, each discovered subproject should still have a coherent local structure. Explicit `.prism.json` files for subprojects are especially useful because they remove ambiguity and reduce path auto-detection work.
