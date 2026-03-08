@@ -1,7 +1,6 @@
 import { Suspense, lazy, useDeferredValue, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import type { User, AuthConfig } from './types/auth';
-import { GoogleOAuthProvider } from '@react-oauth/google';
 import { Button } from '@/components/ui/button';
 import { Toaster } from 'sonner';
 import { Input } from '@/components/ui/input';
@@ -146,16 +145,15 @@ function App() {
         }
 
         return (
-            <GoogleOAuthProvider clientId={authConfig.google_client_id}>
-                <Suspense fallback={<RouteFallback />}>
-                    <LoginPage
-                        onLoginSuccess={setUser}
-                        devMode={authConfig.dev_mode}
-                        workspaceName={authConfig.workspace_name}
-                        initialError={authError}
-                    />
-                </Suspense>
-            </GoogleOAuthProvider>
+            <Suspense fallback={<RouteFallback />}>
+                <LoginPage
+                    onLoginSuccess={setUser}
+                    googleClientId={authConfig.google_client_id}
+                    devMode={authConfig.dev_mode}
+                    workspaceName={authConfig.workspace_name}
+                    initialError={authError}
+                />
+            </Suspense>
         );
     }
 

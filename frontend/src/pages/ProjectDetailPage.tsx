@@ -4,10 +4,6 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, FileText, History, Box, FolderOpen, ChevronLeft, ChevronRight, GitBranch, RotateCcw, PlayCircle, RefreshCw, Menu, Settings } from "lucide-react";
 import { fetchApi, fetchJson, readApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import "github-markdown-css/github-markdown-dark.css";
 import { User } from "@/types/auth";
 
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -26,6 +22,9 @@ const HistoryViewer = lazy(() =>
 );
 const Visualizer = lazy(() =>
     import("@/components/visualizer").then((module) => ({ default: module.Visualizer }))
+);
+const MarkdownContent = lazy(() =>
+    import("@/components/markdown-content").then((module) => ({ default: module.MarkdownContent }))
 );
 
 interface Project {
@@ -424,28 +423,14 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                             </div>
 
                             {readme && (
-                                <div className="markdown-body" style={{ background: 'transparent' }}>
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm]}
-                                        rehypePlugins={[rehypeRaw]}
-                                        components={{
-                                            img: ({ src, alt }) => {
-                                                // Convert relative image paths to use backend API
-                                                const imgSrc = src?.startsWith('http')
-                                                    ? src
-                                                    : `/api/projects/${projectId}/asset/${src}`;
-                                                return (
-                                                    <img
-                                                        src={imgSrc}
-                                                        alt={alt || ''}
-                                                    />
-                                                );
-                                            }
-                                        }}
-                                    >
-                                        {readme}
-                                    </ReactMarkdown>
-                                </div>
+                                <Suspense fallback={<div className="text-sm text-muted-foreground">Loading README...</div>}>
+                                    <MarkdownContent
+                                        content={readme}
+                                        resolveImageSrc={(src) =>
+                                            src?.startsWith('http') ? src : `/api/projects/${projectId}/asset/${src}`
+                                        }
+                                    />
+                                </Suspense>
                             )}
 
                             {!readme && (

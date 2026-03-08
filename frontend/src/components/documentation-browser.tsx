@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Download, File, FileText, Folder, ChevronRight, ChevronDown, Eye, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import "github-markdown-css/github-markdown-dark.css";
 import { FileItem, TreeNode, formatBytes, buildFileTree } from "@/lib/file-utils";
+
+const MarkdownContent = lazy(() =>
+    import("@/components/markdown-content").then((module) => ({ default: module.MarkdownContent }))
+);
 
 interface DocumentationBrowserProps {
     projectId: string;
@@ -170,22 +170,14 @@ export function DocumentationBrowser({ projectId, commit }: DocumentationBrowser
                         Close
                     </Button>
                 </div>
-                <div className="markdown-body" style={{ background: 'transparent' }}>
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        rehypePlugins={[rehypeRaw]}
-                        components={{
-                            img: ({ src, alt }) => {
-                                const imgSrc = src?.startsWith('http')
-                                    ? src
-                                    : `/api/projects/${projectId}/asset/docs/${src}`;
-                                return <img src={imgSrc} alt={alt || ''} />;
-                            }
-                        }}
-                    >
-                        {viewingDoc.content}
-                    </ReactMarkdown>
-                </div>
+                <Suspense fallback={<div className="text-sm text-muted-foreground">Loading document...</div>}>
+                    <MarkdownContent
+                        content={viewingDoc.content}
+                        resolveImageSrc={(src) =>
+                            src?.startsWith('http') ? src : `/api/projects/${projectId}/asset/docs/${src}`
+                        }
+                    />
+                </Suspense>
             </div>
         );
     }
