@@ -9,7 +9,9 @@ import React from "react";
 interface ProjectCardProps {
     project: Project;
     compact?: boolean;
+    selected?: boolean;
     onClick?: () => void;
+    onDoubleClick?: () => void;
     onDelete?: () => void;
     showDelete?: boolean;
     searchQuery?: string;
@@ -37,7 +39,17 @@ function highlightMatch(text: string, query: string): React.ReactNode {
     );
 }
 
-export function ProjectCard({ project, compact, onClick, onDelete, showDelete, searchQuery = "", actions }: ProjectCardProps) {
+export function ProjectCard({
+    project,
+    compact,
+    selected,
+    onClick,
+    onDoubleClick,
+    onDelete,
+    showDelete,
+    searchQuery = "",
+    actions,
+}: ProjectCardProps) {
     const navigate = useNavigate();
 
     const thumbnailUrl = project.thumbnail_url ? project.thumbnail_url : null;
@@ -62,8 +74,9 @@ export function ProjectCard({ project, compact, onClick, onDelete, showDelete, s
     if (compact) {
         return (
             <Card
-                className="overflow-hidden hover:border-primary/50 hover:shadow-md transition-all cursor-pointer group bg-card border shadow-sm"
+                className={`overflow-hidden transition-all cursor-pointer group bg-card border shadow-sm ${selected ? "border-primary shadow-md" : "hover:border-primary/50 hover:shadow-md"}`}
                 onClick={handleClick}
+                onDoubleClick={onDoubleClick}
             >
                 <div className="flex items-center gap-3 p-3">
                     <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center shrink-0 overflow-hidden">
@@ -86,8 +99,9 @@ export function ProjectCard({ project, compact, onClick, onDelete, showDelete, s
 
     return (
         <Card
-            className="overflow-hidden hover:border-primary/50 hover:shadow-md transition-all cursor-pointer group bg-card border shadow-sm"
+            className={`overflow-hidden transition-all cursor-pointer group bg-card border shadow-sm ${selected ? "border-primary shadow-md" : "hover:border-primary/50 hover:shadow-md"}`}
             onClick={handleClick}
+            onDoubleClick={onDoubleClick}
         >
             <div className="aspect-video w-full overflow-hidden bg-muted relative border-b">
                 {thumbnailUrl ? (

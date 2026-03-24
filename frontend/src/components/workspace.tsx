@@ -13,6 +13,7 @@ import { WorkspaceBreadcrumbs } from "./workspace/workspace-breadcrumbs";
 import { WorkspaceGalleryView } from "./workspace/workspace-gallery-view";
 import { WorkspaceListView } from "./workspace/workspace-list-view";
 import { WorkspaceLoadingState } from "./workspace/workspace-loading-state";
+import { WorkspaceProjectPropertiesSheet } from "./workspace/workspace-project-properties-sheet";
 import { WorkspaceProjectToolbar } from "./workspace/workspace-project-toolbar";
 import { WorkspaceSidebar } from "./workspace/workspace-sidebar";
 import { WorkspaceSection, ViewMode } from "./workspace/workspace-types";
@@ -60,6 +61,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
 
   const [isCreateFolderOpen, setIsCreateFolderOpen] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const [folderToRename, setFolderToRename] = useState<FolderTreeItem | null>(null);
   const [isRenamingFolder, setIsRenamingFolder] = useState(false);
@@ -141,6 +143,21 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
   const openProject = (project: Project) => {
     navigate(`/project/${project.id}`);
   };
+
+  const selectProject = (project: Project) => {
+    setSelectedProjectId(project.id);
+  };
+
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === selectedProjectId) ?? null,
+    [projects, selectedProjectId]
+  );
+
+  useEffect(() => {
+    if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(null);
+    }
+  }, [projects, selectedProjectId]);
 
   const handleCreateFolder = async (name: string) => {
     if (!canManageProjects) {
@@ -291,13 +308,13 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
             )}
           </header>
 
-          <main className="min-h-0 flex-1 overflow-y-auto">
+          <main className="min-h-0 flex-1 overflow-hidden">
             {loading ? (
               <WorkspaceLoadingState />
             ) : section === "apps" ? (
               <WorkspaceAppsPlaceholder />
             ) : (
-              <div className="space-y-6 p-6">
+              <div className="flex h-full min-h-0 flex-col p-6">
                 <WorkspaceBreadcrumbs
                   isSearching={isSearching}
                   breadcrumbs={breadcrumbs}
@@ -306,40 +323,64 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
                   onSelectFolder={(folderId) => setFolderInUrl(folderId)}
                 />
 
-                {viewMode === "gallery" ? (
-                  <WorkspaceGalleryView
-                    searchQuery={searchQuery}
-                    isSearching={isSearching}
-                    searchResults={searchResults}
-                    currentFolderId={currentFolderId}
-                    visibleFolders={visibleFolders}
-                    visibleProjects={visibleProjects}
-                    getProjectDisplayName={getProjectDisplayName}
-                    onOpenProject={openProject}
-                    onOpenFolder={(folderId) => setFolderInUrl(folderId)}
-                    onRenameFolder={setFolderToRename}
-                    onDeleteFolder={setFolderToDelete}
-                    onMoveProject={setProjectToMove}
-                    onDeleteProject={setProjectToDelete}
-                    canManageProjects={canManageProjects}
-                  />
-                ) : (
-                  <WorkspaceListView
-                    isSearching={isSearching}
-                    currentFolderId={currentFolderId}
-                    breadcrumbs={breadcrumbs}
-                    listFolders={listFolders}
-                    listProjects={listProjects}
-                    getProjectDisplayName={getProjectDisplayName}
-                    onOpenProject={openProject}
-                    onOpenFolder={(folderId) => setFolderInUrl(folderId)}
-                    onRenameFolder={setFolderToRename}
-                    onDeleteFolder={setFolderToDelete}
-                    onMoveProject={setProjectToMove}
-                    onDeleteProject={setProjectToDelete}
-                    canManageProjects={canManageProjects}
-                  />
-                )}
+                <div className="relative mt-6 min-h-0 flex-1 overflow-hidden">
+                  <div className="h-full overflow-y-auto pr-1">
+                    {viewMode === "gallery" ? (
+                      <WorkspaceGalleryView
+                        searchQuery={searchQuery}
+                        isSearching={isSearching}
+                        searchResults={searchResults}
+                        selectedProjectId={selectedProjectId}
+                        currentFolderId={currentFolderId}
+                        visibleFolders={visibleFolders}
+                        visibleProjects={visibleProjects}
+                        getProjectDisplayName={getProjectDisplayName}
+                        onSelectProject={selectProject}
+                        onOpenProject={openProject}
+                        onOpenFolder={(folderId) => setFolderInUrl(folderId)}
+                        onRenameFolder={setFolderToRename}
+                        onDeleteFolder={setFolderToDelete}
+                        onMoveProject={setProjectToMove}
+                        onDeleteProject={setProjectToDelete}
+                        canManageProjects={canManageProjects}
+                      />
+                    ) : (
+                      <WorkspaceListView
+                        isSearching={isSearching}
+                        selectedProjectId={selectedProjectId}
+                        currentFolderId={currentFolderId}
+                        breadcrumbs={breadcrumbs}
+                        listFolders={listFolders}
+                        listProjects={listProjects}
+                        getProjectDisplayName={getProjectDisplayName}
+                        onSelectProject={selectProject}
+                        onOpenProject={openProject}
+                        onOpenFolder={(folderId) => setFolderInUrl(folderId)}
+                        onRenameFolder={setFolderToRename}
+                        onDeleteFolder={setFolderToDelete}
+                        onMoveProject={setProjectToMove}
+                        onDeleteProject={setProjectToDelete}
+                        canManageProjects={canManageProjects}
+                      />
+                    )}
+                  </div>
+
+                  <div className="pointer-events-none absolute inset-y-0 right-0 z-20 flex justify-end">
+                    <div className="pointer-events-auto h-full">
+                      <WorkspaceProjectPropertiesSheet
+                        open={selectedProject !== null}
+                        project={selectedProject}
+                        folderById={folderById}
+                        onOpenChange={(open) => {
+                          if (!open) {
+                            setSelectedProjectId(null);
+                          }
+                        }}
+                        onOpenProject={openProject}
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </main>
@@ -410,6 +451,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
           />
         </Suspense>
       )}
+
     </>
   );
 }

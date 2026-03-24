@@ -7,11 +7,13 @@ import { FolderActionMenu, ProjectActionMenu } from "./workspace-action-menus";
 
 interface WorkspaceListViewProps {
   isSearching: boolean;
+  selectedProjectId: string | null;
   currentFolderId: string | null;
   breadcrumbs: FolderTreeItem[];
   listFolders: FolderTreeItem[];
   listProjects: Project[];
   getProjectDisplayName: (project: Project) => string;
+  onSelectProject: (project: Project) => void;
   onOpenProject: (project: Project) => void;
   onOpenFolder: (folderId: string) => void;
   onRenameFolder: (folder: FolderTreeItem) => void;
@@ -40,11 +42,13 @@ function resolveProjectLocation(
 
 export function WorkspaceListView({
   isSearching,
+  selectedProjectId,
   currentFolderId,
   breadcrumbs,
   listFolders,
   listProjects,
   getProjectDisplayName,
+  onSelectProject,
   onOpenProject,
   onOpenFolder,
   onRenameFolder,
@@ -97,12 +101,15 @@ export function WorkspaceListView({
           {listProjects.map((project) => (
             <div
               key={project.id}
-              className="grid grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto] items-center border-b px-4 py-2"
+              className={`grid grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto] items-center border-b px-4 py-2 transition-colors ${selectedProjectId === project.id ? "bg-primary/5" : "hover:bg-muted/30"}`}
+              onClick={() => onSelectProject(project)}
+              onDoubleClick={() => onOpenProject(project)}
             >
               <button
                 type="button"
                 className="truncate text-left text-sm font-medium hover:text-primary"
-                onClick={() => onOpenProject(project)}
+                onClick={() => onSelectProject(project)}
+                onDoubleClick={() => onOpenProject(project)}
               >
                 {getProjectDisplayName(project)}
               </button>
@@ -111,7 +118,11 @@ export function WorkspaceListView({
                 {resolveProjectLocation(project, isSearching, currentFolderId, breadcrumbs)}
               </p>
               <p className="truncate text-sm text-muted-foreground">{project.last_modified}</p>
-              <div className="flex justify-end">
+              <div
+                className="flex justify-end"
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+              >
                 <ProjectActionMenu
                   project={project}
                   projectName={getProjectDisplayName(project)}

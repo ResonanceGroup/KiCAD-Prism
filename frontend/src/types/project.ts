@@ -5,6 +5,7 @@ export interface Project {
     description: string;
     path: string;
     last_modified: string;
+    registered_at?: string;
     thumbnail_url?: string;
     sub_path?: string;
     parent_repo?: string;
@@ -58,4 +59,66 @@ export interface MonorepoStructure {
     current_path: string;
     folders: MonorepoFolder[];
     projects: MonorepoProject[];
+}
+
+export interface ProjectPropertiesFileTitleBlock {
+    title: string;
+    date: string;
+    rev: string;
+    company: string;
+    comments: Record<string, string>;
+}
+
+export interface ProjectPropertiesSchematicFile {
+    path: string;
+    filename: string;
+    version?: number;
+    generator?: string;
+    generator_version?: string;
+    paper?: string;
+    uuid?: string;
+    title_block?: ProjectPropertiesFileTitleBlock | null;
+}
+
+export interface ProjectPropertiesPcbFile {
+    path: string;
+    filename: string;
+    version?: number;
+    generator?: string;
+    generator_version?: string;
+    paper?: string;
+    dimensions_mm?: {
+        width_mm: number;
+        height_mm: number;
+    } | null;
+    thickness_mm?: number;
+    title_block?: ProjectPropertiesFileTitleBlock | null;
+}
+
+export interface ProjectPropertiesTag {
+    tag: string;
+    commit_hash: string;
+    date: string;
+    message: string;
+}
+
+export interface ProjectPropertiesLatestCommit {
+    hash: string;
+    full_hash: string;
+    author: string;
+    email: string;
+    date: string;
+    message: string;
+}
+
+export interface ProjectPropertiesResponse {
+    project: Project;
+    repository: {
+        latest_commit: ProjectPropertiesLatestCommit | null;
+        latest_tag: ProjectPropertiesTag | null;
+    };
+    files: {
+        schematic: ProjectPropertiesSchematicFile | null;
+        pcb: ProjectPropertiesPcbFile | null;
+    };
 }

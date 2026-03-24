@@ -1,15 +1,22 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api._helpers import get_project_for_role_or_404, require_output_type, resolve_path_within_root
 from app.core.security import AuthenticatedUser, require_designer, require_viewer
-from app.services import file_service, folder_service, path_config_service, project_import_service, project_service
+from app.services import (
+    file_service,
+    folder_service,
+    path_config_service,
+    project_import_service,
+    project_properties_service,
+    project_service,
+)
 from app.services.comments_url_service import build_comments_source_urls, resolve_comments_base_url
 from app.services.git_service import (
     get_commit_distance,
@@ -32,6 +39,69 @@ class Monorepo(BaseModel):
     project_count: int
     last_synced: Optional[str] = None
     repo_url: Optional[str] = None
+
+
+class ProjectPropertiesTitleBlock(BaseModel):
+    title: str = ""
+    date: str = ""
+    rev: str = ""
+    company: str = ""
+    comments: Dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectPropertiesSchematicFile(BaseModel):
+    path: str
+    filename: str
+    version: Optional[int] = None
+    generator: Optional[str] = None
+    generator_version: Optional[str] = None
+    paper: Optional[str] = None
+    uuid: Optional[str] = None
+    title_block: Optional[ProjectPropertiesTitleBlock] = None
+
+
+class ProjectPropertiesPcbFile(BaseModel):
+    path: str
+    filename: str
+    version: Optional[int] = None
+    generator: Optional[str] = None
+    generator_version: Optional[str] = None
+    paper: Optional[str] = None
+    dimensions_mm: Optional[Dict[str, float]] = None
+    thickness_mm: Optional[float] = None
+    title_block: Optional[ProjectPropertiesTitleBlock] = None
+
+
+class ProjectPropertiesLatestCommit(BaseModel):
+    hash: str
+    full_hash: str
+    author: str
+    email: str
+    date: str
+    message: str
+
+
+class ProjectPropertiesTag(BaseModel):
+    tag: str
+    commit_hash: str
+    date: str
+    message: str
+
+
+class ProjectPropertiesRepository(BaseModel):
+    latest_commit: Optional[ProjectPropertiesLatestCommit] = None
+    latest_tag: Optional[ProjectPropertiesTag] = None
+
+
+class ProjectPropertiesFiles(BaseModel):
+    schematic: Optional[ProjectPropertiesSchematicFile] = None
+    pcb: Optional[ProjectPropertiesPcbFile] = None
+
+
+class ProjectPropertiesResponse(BaseModel):
+    project: project_service.Project
+    repository: ProjectPropertiesRepository
+    files: ProjectPropertiesFiles
 
 
 def _repo_context(project: project_service.Project) -> tuple[str, Optional[str]]:
@@ -394,6 +464,55 @@ async def get_project_thumbnail(project_id: str, user: AuthenticatedUser = Depen
 async def get_project_detail(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
     """Get detailed project information."""
     return get_project_for_role_or_404(project_id, user.role)
+
+
+@router.get("/{project_id}/properties", response_model=ProjectPropertiesResponse)
+async def get_project_properties(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+    project = get_project_for_role_or_404(project_id, user.role)
+    repo_path, relative_path = _repo_context(project)
+
+    if relative_path:
+        releases = get_releases_filtered(repo_path, relative_path)
+        latest_commits = get_commits_list_filtered(repo_path, relative_path, 1)
+    else:
+        releases = get_releases(repo_path)
+        latest_commits = get_commits_list(repo_path, 1)
+
+    latest_commit = latest_commits[0] if latest_commits else None
+    latest_tag = releases[0] if releases else None
+
+    schematic_path = project_service.find_schematic_file(project.path)
+    pcb_path = project_service.find_pcb_file(project.path)
+    schematic_metadata = project_properties_service.extract_schematic_metadata(project.path, schematic_path)
+    pcb_metadata = project_properties_service.extract_pcb_metadata(project.path, pcb_path)
+
+    return ProjectPropertiesResponse(
+        project=project,
+        repository=ProjectPropertiesRepository(
+            latest_commit=(
+                ProjectPropertiesLatestCommit(**latest_commit)
+                if latest_commit
+                else None
+            ),
+            latest_tag=(
+                ProjectPropertiesTag(**latest_tag)
+                if latest_tag
+                else None
+            ),
+        ),
+        files=ProjectPropertiesFiles(
+            schematic=(
+                ProjectPropertiesSchematicFile(**schematic_metadata)
+                if schematic_metadata
+                else None
+            ),
+            pcb=(
+                ProjectPropertiesPcbFile(**pcb_metadata)
+                if pcb_metadata
+                else None
+            ),
+        ),
+    )
 
 
 @router.get("/{project_id}/overview")
