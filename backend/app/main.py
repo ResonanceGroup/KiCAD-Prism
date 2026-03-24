@@ -7,7 +7,6 @@ from app.api.diff import router as diff_router
 from app.api.folders import router as folders_router
 from app.api.settings import router as settings_router
 from app.api.workspace import router as workspace_router
-from app.services.git_service import router as git_router
 from app.services.comments_store_service import initialize_comments_store
 from app.core.config import settings
 import subprocess
@@ -116,7 +115,6 @@ app.add_middleware(
 )
 
 # Include Routers
-app.include_router(git_router, prefix="/api/git", tags=["git"])
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
 app.include_router(comments_router, prefix="/api/projects", tags=["comments"])

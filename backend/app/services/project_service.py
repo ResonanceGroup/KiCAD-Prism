@@ -368,6 +368,7 @@ def _run_clone_job(job_id: str, repo_url: str, selected_paths: Optional[List[str
     
     # Clone to monorepos directory
     target_path = os.path.join(MONOREPOS_ROOT, project_name)
+    target_path_abs = os.path.abspath(target_path)
     
     # Check if monorepo already exists
     if os.path.exists(target_path):
@@ -401,8 +402,8 @@ def _run_clone_job(job_id: str, repo_url: str, selected_paths: Optional[List[str
                 # Check for duplicate ID
                 registry = _load_project_registry()
                 if project_id in registry:
-                    existing_path = registry[project_id].get("path", "")
-                    if existing_path != os.path.join(target_path, sub_path):
+                    existing_path = _normalize_path(registry[project_id].get("path", ""))
+                    if existing_path != os.path.abspath(os.path.join(target_path, sub_path)):
                         # Different project with same ID - add numeric suffix
                         suffix = 1
                         original_id = project_id
@@ -443,8 +444,8 @@ def _run_clone_job(job_id: str, repo_url: str, selected_paths: Optional[List[str
                 # Check for duplicate ID
                 registry = _load_project_registry()
                 if project_id in registry:
-                    existing_path = registry[project_id].get("path", "")
-                    if existing_path != target_path:
+                    existing_path = _normalize_path(registry[project_id].get("path", ""))
+                    if existing_path != target_path_abs:
                         # Different project with same ID - add numeric suffix
                         suffix = 1
                         original_id = project_id
@@ -764,15 +765,17 @@ def delete_project(project_id: str) -> bool:
     Delete a project from the registry and optionally remove its files.
     Returns True if project was found and deleted, False otherwise.
     """
+    project = get_project_by_id(project_id)
+    if not project:
+        return False
+
     registry = _load_project_registry()
-    
     if project_id not in registry:
         return False
-    
-    project_data = registry[project_id]
-    project_path = project_data.get("path")
-    parent_repo = project_data.get("parent_repo")
-    import_type = project_data.get("import_type")
+
+    project_path = project.path
+    parent_repo = project.parent_repo
+    import_type = project.import_type
     
     # Remove from registry
     del registry[project_id]
@@ -787,8 +790,7 @@ def delete_project(project_id: str) -> bool:
         
         # If no remaining subprojects, delete the parent repo directory
         if not remaining_subprojects and project_path:
-            # Get parent repo path (go up one level from subproject)
-            parent_repo_path = os.path.dirname(project_path)
+            parent_repo_path = project.parent_repo_path or os.path.dirname(project_path)
             if os.path.exists(parent_repo_path):
                 try:
                     shutil.rmtree(parent_repo_path)

@@ -1,24 +1,9 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import HTTPException
 from git import Repo
 from git.exc import BadName, GitCommandError
-from typing import List, Dict, Any
-from pydantic import BaseModel
+from typing import Dict, Any
 import datetime
-
-from app.core.security import require_viewer
-
-router = APIRouter(dependencies=[Depends(require_viewer)])
-
-# Configuration
-# Default to sibling directory for development
-DEFAULT_REPO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../JTYU-OBC"))
-
-class CommitInfo(BaseModel):
-    hexsha: str
-    message: str
-    author: str
-    date: str
 
 
 def _open_repo(repo_path: str) -> Repo:
@@ -149,33 +134,6 @@ def file_exists_in_commit_with_prefix(repo_path: str, commit_hash: str, file_pat
     except:
         return False
 
-
-class FileContentRequest(BaseModel):
-    repo_path: str = DEFAULT_REPO_PATH
-    commit_sha: str
-    file_path: str
-
-@router.get("/commits", response_model=List[CommitInfo])
-async def list_commits(repo_path: str = DEFAULT_REPO_PATH, limit: int = 50):
-    """
-    List commits for a given repository.
-    """
-    try:
-        repo = _open_repo(repo_path)
-        commits = []
-        for commit in repo.iter_commits(max_count=limit):
-            commits.append(CommitInfo(
-                hexsha=commit.hexsha,
-                message=commit.message.strip(),
-                author=commit.author.name,
-                date=datetime.datetime.fromtimestamp(commit.committed_date).isoformat()
-            ))
-        return commits
-    except HTTPException:
-        raise
-    except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Git error: {str(error)}") from error
-
 def get_releases(repo_path: str):
     """
     Get list of Git tags/releases from repository.
@@ -212,29 +170,6 @@ def get_commit_distance(repo_path: str, commit_hash: str, relative_path: str = N
         raise HTTPException(status_code=500, detail=f"Git error: {str(error)}") from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Git error: {str(error)}") from error
-
-@router.get("/content")
-async def get_file_content(commit_sha: str, file_path: str, repo_path: str = DEFAULT_REPO_PATH):
-    """
-    Get file content from a specific commit.
-    """
-    try:
-        repo = _open_repo(repo_path)
-        commit = repo.commit(commit_sha)
-        
-        try:
-            target_file = commit.tree / file_path
-            # For text files, we decode. For binaries, we might need a different strategy (e.g. base64)
-            # For now, let's assume text or try to decode utf-8
-            blob = target_file.data_stream.read()
-            return {"content": blob.decode('utf-8'), "size": target_file.size}
-        except KeyError:
-             raise HTTPException(status_code=404, detail=f"File {file_path} not found in commit {commit_sha}")
-        except UnicodeDecodeError:
-             return {"content": "Binary file (preview not available)", "size": target_file.size, "is_binary": True}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Git error: {str(e)}")
 
 def get_file_from_commit(repo_path: str, commit_hash: str, file_path: str) -> str:
     """

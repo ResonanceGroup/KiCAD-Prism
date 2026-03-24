@@ -314,6 +314,7 @@ def _run_import_job(job_id: str, repo_url: str, import_type: str,
             base_path = Path(project_service.PROJECTS_ROOT) / "type2"
         
         target_path = base_path / repo_name
+        target_path_abs = str(target_path.resolve())
         
         # Check if already exists
         if target_path.exists():
@@ -344,8 +345,11 @@ def _run_import_job(job_id: str, repo_url: str, import_type: str,
             else:
                 # Type-1: Check if project exists in registry
                 existing_project = next(
-                    (p for p in registry.values() 
-                     if p.get("import_type") == "type1" and p.get("path") == str(target_path)),
+                    (
+                        p for p in registry.values()
+                        if p.get("import_type") == "type1"
+                        and project_service._normalize_path(p.get("path", "")) == target_path_abs
+                    ),
                     None
                 )
                 if existing_project:
@@ -547,27 +551,24 @@ def sync_project(project_id: str) -> dict:
     For Type-1: pulls the project repo.
     For Type-2: pulls the parent repo.
     """
-    registry = project_service._load_project_registry()
-    
-    if project_id not in registry:
+    project = project_service.get_project_by_id(project_id)
+    if not project:
         return {"status": "error", "message": "Project not found"}
-    
-    project_data = registry[project_id]
-    import_type = project_data.get('import_type', 'type1')
-    
-    # Determine sync path
+
+    import_type = project.import_type or 'type1'
+
+    # Use normalized project paths from project_service so sync works across
+    # host/container environments even when the raw registry stores a legacy path.
     if import_type == 'type2_subproject':
-        # For Type-2, use parent_repo_path if available, otherwise derive from path
-        sync_path = project_data.get('parent_repo_path')
+        sync_path = project.parent_repo_path
         if not sync_path:
-            # Fallback: go up from subproject path to parent repo
-            sync_path = str(Path(project_data.get('path')).parent)
+            sync_path = str(Path(project.path).parent)
     else:
-        sync_path = project_data.get('path')
-    
+        sync_path = project.path
+
     if not sync_path or not os.path.exists(sync_path):
         return {"status": "error", "message": f"Project path not found: {sync_path}"}
-    
+
     try:
         repo = Repo(sync_path)
         origin = repo.remote('origin')
