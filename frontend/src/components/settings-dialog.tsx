@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -30,6 +30,10 @@ export function SettingsDialog({ open, onOpenChange, user }: SettingsDialogProps
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-w-4xl p-0 overflow-hidden flex h-[600px]">
+                <DialogTitle className="sr-only">Workspace Settings</DialogTitle>
+                <DialogDescription className="sr-only">
+                    Manage Git, SSH, and access control settings for this workspace.
+                </DialogDescription>
                 <div className="w-64 bg-muted/30 border-r p-4 flex flex-col gap-2">
                     <div className="mb-4 px-2">
                         <h2 className="text-lg font-semibold tracking-tight">Settings</h2>

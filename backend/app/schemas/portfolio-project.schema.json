@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kicad-prism.local/schemas/portfolio-project.schema.json",
+  "title": "KiCAD Prism Portfolio Metadata",
+  "description": "Optional portfolio block that can be embedded inside a project's .prism.json. Importing the repository is still enough for auto-detection; this schema only overrides presentation details.",
+  "type": "object",
+  "properties": {
+    "project_name": {
+      "type": "string",
+      "description": "Human-friendly project title shown in Prism and the portfolio."
+    },
+    "description": {
+      "type": "string",
+      "description": "Short project description used in project lists and overview cards."
+    },
+    "portfolio": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "order": {
+          "type": "integer",
+          "description": "Optional sort priority for the landing bench."
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Marks the project as preferred for portfolio surfaces."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Portfolio-facing summary shown in overview and bench callouts."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Short portfolio tags for overview chips."
+        },
+        "modelPath": {
+          "type": "string",
+          "description": "Relative path to the GLB/STEP model inside the repository. If omitted, KiCAD Prism auto-detects the first model in Design-Outputs/3DModel or Design-Outputs."
+        },
+        "thumbnailPath": {
+          "type": "string",
+          "description": "Relative path to the preferred thumbnail image. If omitted, KiCAD Prism auto-detects images from assets/thumbnail or similar folders."
+        },
+        "bench": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "position": {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "rotation": {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "scale": {
+              "type": "number"
+            },
+            "label": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "accentColor": {
+              "type": "string",
+              "pattern": "^#([0-9a-fA-F]{6})$"
+            },
+            "boardColor": {
+              "type": "string",
+              "pattern": "^#([0-9a-fA-F]{6})$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -31,6 +31,9 @@ export function LoginPage({
   const [error, setError] = useState<string | null>(initialError);
   const [isLoading, setIsLoading] = useState(false);
   const [releaseTag, setReleaseTag] = useState("...");
+  const hostname = typeof window === "undefined" ? "" : window.location.hostname;
+  const isLocalOrigin = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  const enableOneTap = typeof window !== "undefined" && window.isSecureContext && !isLocalOrigin;
 
   useEffect(() => {
     setError(initialError);
@@ -161,8 +164,8 @@ export function LoginPage({
                   <GoogleLogin
                     onSuccess={handleSuccess}
                     onError={() => setError("Google sign-in failed")}
-                    useOneTap
-                    auto_select
+                    useOneTap={enableOneTap}
+                    auto_select={enableOneTap}
                     theme="outline"
                     shape="pill"
                     size="large"

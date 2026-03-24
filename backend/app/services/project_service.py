@@ -6,7 +6,8 @@ import shutil
 import threading
 import datetime
 import subprocess
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from git import Repo, RemoteProgress
 from pydantic import BaseModel
@@ -27,6 +28,7 @@ class Project(BaseModel):
     import_type: Optional[str] = None  # "type1" or "type2_subproject"
     parent_repo_path: Optional[str] = None  # Path to parent repo for Type-2
     folder_id: Optional[str] = None  # Optional folder assignment for workspace organization
+    portfolio: Optional[Dict[str, Any]] = None  # Portfolio scene/detail metadata
 
 
 class RegisteredProjectRecord(BaseModel):
@@ -173,9 +175,71 @@ def _record_last_modified(path: str, fallback: str) -> str:
         return fallback
 
 
+def _to_relative_project_path(project_path: str, file_path: Optional[str]) -> Optional[str]:
+    if not file_path:
+        return None
+    try:
+        relative = os.path.relpath(file_path, project_path)
+    except ValueError:
+        return None
+    if relative.startswith(".."):
+        return None
+    return relative.replace(os.sep, "/")
+
+
+def _resolve_thumbnail_from_path(project_path: str) -> Optional[str]:
+    config = path_config_service.get_path_config(project_path)
+    resolved = path_config_service.resolve_paths(project_path, config)
+    thumbnail_path = resolved.thumbnail_dir
+
+    if not thumbnail_path or not os.path.exists(thumbnail_path):
+        return None
+
+    if os.path.isfile(thumbnail_path):
+        return thumbnail_path
+
+    for file_name in sorted(os.listdir(thumbnail_path)):
+        if file_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            return os.path.join(thumbnail_path, file_name)
+
+    return None
+
+
+def _build_portfolio_metadata(project_id: str, project_path: str) -> Optional[Dict[str, Any]]:
+    configured = path_config_service.get_portfolio_config(project_path)
+    portfolio: Dict[str, Any] = dict(configured) if configured else {}
+
+    model_path = portfolio.get("modelPath")
+    if not model_path:
+        detected_model = find_3d_model(project_path)
+        model_path = _to_relative_project_path(project_path, detected_model)
+
+    thumbnail_path = portfolio.get("thumbnailPath")
+    if not thumbnail_path:
+        detected_thumbnail = _resolve_thumbnail_from_path(project_path)
+        thumbnail_path = _to_relative_project_path(project_path, detected_thumbnail)
+
+    if model_path:
+        encoded_model_path = quote(model_path, safe="/")
+        portfolio["modelPath"] = model_path
+        portfolio["modelUrl"] = f"/api/projects/{quote(project_id, safe='')}/asset/{encoded_model_path}"
+
+    if thumbnail_path:
+        encoded_thumbnail_path = quote(thumbnail_path, safe="/")
+        portfolio["thumbnailPath"] = thumbnail_path
+        portfolio["thumbnailUrl"] = f"/api/projects/{quote(project_id, safe='')}/asset/{encoded_thumbnail_path}"
+
+    if "tags" not in portfolio:
+        portfolio["tags"] = []
+
+    return portfolio or None
+
+
 def _record_to_project(record: RegisteredProjectRecord) -> Project:
     custom_display_name = path_config_service.get_project_display_name(record.path)
     custom_description = path_config_service.get_project_description(record.path)
+    portfolio = _build_portfolio_metadata(record.id, record.path)
+    thumbnail_path = _resolve_thumbnail_from_path(record.path)
 
     return Project(
         id=record.id,
@@ -184,13 +248,14 @@ def _record_to_project(record: RegisteredProjectRecord) -> Project:
         description=custom_description or record.description,
         path=record.path,
         last_modified=record.last_modified,
-        thumbnail_url=f"/api/projects/{record.id}/thumbnail",
+        thumbnail_url=f"/api/projects/{record.id}/thumbnail" if thumbnail_path else None,
         sub_path=record.sub_path,
         parent_repo=record.parent_repo,
         repo_url=record.repo_url,
         import_type=record.import_type,
         parent_repo_path=record.parent_repo_path,
         folder_id=record.folder_id,
+        portfolio=portfolio,
     )
 
 

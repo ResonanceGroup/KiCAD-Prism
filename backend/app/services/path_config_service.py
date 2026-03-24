@@ -100,6 +100,7 @@ class PathConfig(BaseModel):
     project_name: Optional[str] = None
     description: Optional[str] = None
     workflows: Optional[List[Any]] = None
+    portfolio: Optional[Dict[str, Any]] = None
     
     class Config:
         extra = "allow"  # Allow additional custom paths
@@ -495,6 +496,22 @@ def get_project_description(project_path: str) -> Optional[str]:
     return config.description if config.description else None
 
 
+def get_portfolio_config(project_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Get portfolio metadata from .prism.json.
+
+    Args:
+        project_path: Absolute path to project root
+
+    Returns:
+        Portfolio metadata dict or None if not set
+    """
+    config = get_path_config(project_path)
+    if not config.portfolio or not isinstance(config.portfolio, dict):
+        return None
+    return config.portfolio
+
+
 def save_path_config(project_path: str, config: PathConfig) -> None:
     """
     Save path configuration to .prism.json.
@@ -527,7 +544,7 @@ def save_path_config(project_path: str, config: PathConfig) -> None:
             existing["paths"][field] = config_dict[field]
     
     # Non-path fields go at top level
-    non_path_fields = ["project_name", "description", "workflows"]
+    non_path_fields = ["project_name", "description", "workflows", "portfolio"]
     for field in non_path_fields:
         if field in config_dict:
             existing[field] = config_dict[field]
