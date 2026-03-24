@@ -1,5 +1,4 @@
-import { lazy, Suspense, useEffect, useState, useCallback, useRef } from "react";
-import * as React from "react";
+import { lazy, Suspense, useEffect, useState, useCallback, useRef, useLayoutEffect, useMemo } from "react";
 import { Cpu, Box, FileText, MessageSquarePlus, MessageSquare, GitBranch, CircuitBoard, Link2, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
@@ -19,23 +18,6 @@ import type {
 const Model3DViewer = lazy(() =>
     import("./model-3d-viewer").then((module) => ({ default: module.Model3DViewer }))
 );
-
-// Wrapper to set blob properties immediately via useLayoutEffect
-const EcadBlob = ({ filename, content }: { filename: string; content: string }) => {
-    const ref = React.useRef<HTMLElement>(null);
-
-    // Use layout effect to set properties immediately after mount
-    React.useLayoutEffect(() => {
-        if (ref.current) {
-            (ref.current as any).filename = filename;
-            (ref.current as any).content = content;
-        }
-    }, [filename, content]);
-
-    return React.createElement('ecad-blob', { ref });
-};
-
-
 
 interface VisualizerProps {
     projectId: string;
@@ -59,6 +41,85 @@ const isAbortError = (error: unknown): boolean =>
 
 const CROSS_PROBE_MAX_RETRIES = 12;
 const CROSS_PROBE_RETRY_DELAY_MS = 120;
+
+type ViewerBlobSource = {
+    filename: string;
+    content: string;
+};
+
+const buildViewerKey = (
+    kind: "schematic" | "pcb",
+    projectId: string,
+    sources: ViewerBlobSource[],
+) => {
+    const signature = sources
+        .map(({ filename, content }) => `${filename}:${content.length}`)
+        .join("|");
+    return `${kind}:${projectId}:${signature}`;
+};
+
+type EcadViewerHostProps = {
+    viewerKey: string;
+    sources: ViewerBlobSource[];
+    setViewerRef: (node: ECadViewerElement | null) => void;
+};
+
+function EcadViewerHost({ viewerKey, sources, setViewerRef }: EcadViewerHostProps) {
+    const hostRef = useRef<ECadViewerElement | null>(null);
+
+    const attachViewerRef = useCallback((node: ECadViewerElement | null) => {
+        hostRef.current = node;
+        setViewerRef(node);
+    }, [setViewerRef]);
+
+    useLayoutEffect(() => {
+        const viewer = hostRef.current;
+        if (!viewer || sources.length === 0) return;
+
+        let cancelled = false;
+
+        const hydrateViewer = async () => {
+            await customElements.whenDefined("ecad-blob");
+            if (cancelled || !hostRef.current) return;
+
+            const activeViewer = hostRef.current;
+            activeViewer.querySelectorAll("ecad-blob").forEach((blob) => blob.remove());
+
+            for (const source of sources) {
+                const blob = document.createElement("ecad-blob") as HTMLElement & {
+                    filename?: string;
+                    content?: string;
+                };
+                blob.filename = source.filename;
+                blob.content = source.content;
+                activeViewer.appendChild(blob);
+            }
+
+            const viewerWithLoader = activeViewer as ECadViewerElement & {
+                load_src?: () => Promise<void> | void;
+            };
+            if (typeof viewerWithLoader.load_src === "function") {
+                await viewerWithLoader.load_src();
+            }
+        };
+
+        void hydrateViewer();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [sources, viewerKey]);
+
+    return (
+        <ecad-viewer
+            ref={attachViewerRef}
+            style={{ width: "100%", height: "100%" }}
+            show-header="true"
+            header-sections="beginning,end"
+            key={viewerKey}
+        />
+    );
+}
 
 export function Visualizer({ projectId, user }: VisualizerProps) {
     const [schematicViewerElement, setSchematicViewerElement] = useState<ECadViewerElement | null>(null);
@@ -378,10 +439,6 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
             const loadSchematic = async () => {
                 try {
                     const baseUrl = `/api/projects/${projectId}`;
-
-                    const delay = 150;
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    if (signal.aborted) return;
 
                     const [schRes, subsheetsRes] = await Promise.allSettled([
                         fetch(`${baseUrl}/schematic`, { signal }),
@@ -800,6 +857,20 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
     const shouldShowOverlay =
         (activeTab === "sch" && Boolean(schematicContent && schematicViewerElement)) ||
         (activeTab === "pcb" && Boolean(pcbContent && pcbViewerElement));
+    const schematicSources = useMemo<ViewerBlobSource[]>(
+        () => (schematicContent
+            ? [{ filename: "root.kicad_sch", content: schematicContent }, ...subsheets]
+            : []),
+        [schematicContent, subsheets],
+    );
+    const pcbSources = useMemo<ViewerBlobSource[]>(
+        () => (pcbContent
+            ? [{ filename: "board.kicad_pcb", content: pcbContent }]
+            : []),
+        [pcbContent],
+    );
+    const schematicViewerKey = buildViewerKey("schematic", projectId, schematicSources);
+    const pcbViewerKey = buildViewerKey("pcb", projectId, pcbSources);
 
     // Tab Config
     const tabs: { id: VisualizerTab; label: string; icon: any }[] = [
@@ -975,17 +1046,12 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                 {/* Schematic View - always mounted but conditionally visible */}
                 <div className={`absolute inset-0 z-10 transition-opacity duration-200 ${activeTab === "sch" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}>
                     {schematicContentLoaded ? (
-                        schematicContent ? (
-                            <ecad-viewer
-                                ref={setSchematicViewerRef}
-                                style={{ width: '100%', height: '100%' }}
-                                show-header="true"
-                                header-sections="beginning,end"
-                                key={`schematic-viewer-${projectId}`}
-                            >
-                                <EcadBlob filename="root.kicad_sch" content={schematicContent} />
-                                {subsheets.map(s => <EcadBlob key={s.filename} filename={s.filename} content={s.content} />)}
-                            </ecad-viewer>
+                        schematicSources.length > 0 ? (
+                            <EcadViewerHost
+                                viewerKey={schematicViewerKey}
+                                sources={schematicSources}
+                                setViewerRef={setSchematicViewerRef}
+                            />
                         ) : (
                             <div className="flex items-center justify-center h-full text-muted-foreground">
                                 <p>No schematic files found.</p>
@@ -1001,16 +1067,12 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                 {/* PCB View - always mounted but conditionally visible */}
                 <div className={`absolute inset-0 z-10 transition-opacity duration-200 ${activeTab === "pcb" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}>
                     {pcbContentLoaded ? (
-                        pcbContent ? (
-                            <ecad-viewer
-                                ref={setPcbViewerRef}
-                                style={{ width: '100%', height: '100%' }}
-                                show-header="true"
-                                header-sections="beginning,end"
-                                key={`pcb-viewer-${projectId}`}
-                            >
-                                <EcadBlob filename="board.kicad_pcb" content={pcbContent} />
-                            </ecad-viewer>
+                        pcbSources.length > 0 ? (
+                            <EcadViewerHost
+                                viewerKey={pcbViewerKey}
+                                sources={pcbSources}
+                                setViewerRef={setPcbViewerRef}
+                            />
                         ) : (
                             <div className="flex items-center justify-center h-full text-muted-foreground">
                                 <p>No PCB files found.</p>
