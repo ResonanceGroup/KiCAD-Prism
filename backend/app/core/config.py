@@ -93,6 +93,70 @@ class Settings(BaseSettings):
     )
     
     # ===========================================
+    # GitHub OAuth (Coder-style org restriction)
+    # ===========================================
+    GITHUB_CLIENT_ID: str = Field(
+        default="",
+        description="GitHub OAuth App Client ID."
+    )
+
+    GITHUB_CLIENT_SECRET: str = Field(
+        default="",
+        description="GitHub OAuth App Client Secret."
+    )
+
+    # Only members of this GitHub org are permitted to log in.
+    # Leave empty to allow any authenticated GitHub user.
+    GITHUB_ORG_LOGIN: str = Field(
+        default="",
+        description="GitHub organization slug; only members may log in (e.g. 'yourcompany')."
+    )
+
+    # ===========================================
+    # Email / SMTP (for verification + password reset)
+    # ===========================================
+    SMTP_HOST: str = Field(
+        default="",
+        description="SMTP server hostname (e.g. smtp.yourmailserver.com)."
+    )
+
+    SMTP_PORT: int = Field(
+        default=587,
+        description="SMTP server port (typically 587 for STARTTLS, 465 for SSL)."
+    )
+
+    SMTP_USER: str = Field(
+        default="",
+        description="SMTP authentication username."
+    )
+
+    SMTP_PASS: str = Field(
+        default="",
+        description="SMTP authentication password."
+    )
+
+    SMTP_FROM: str = Field(
+        default="",
+        description="From address used for outgoing emails (e.g. prism@yourcompany.com)."
+    )
+
+    # Set to True to use STARTTLS when connecting to the SMTP server.
+    SMTP_TLS: bool = Field(
+        default=True,
+        description="Enable STARTTLS for the SMTP connection."
+    )
+
+    # ===========================================
+    # Email domain whitelist for auto-approval
+    # ===========================================
+    # Comma-separated list of email domains that are automatically approved
+    # without requiring an explicit role assignment (e.g. 'yourcompany.com,example.com').
+    ALLOWED_EMAIL_DOMAINS_STR: str = Field(
+        default="",
+        description="Comma-separated email domains eligible for auto-approval."
+    )
+
+    # ===========================================
     # Git & GitHub Integration
     # ===========================================
     GITHUB_TOKEN: str = Field(
@@ -126,6 +190,11 @@ class Settings(BaseSettings):
     def BOOTSTRAP_ADMIN_USERS(self) -> List[str]:
         """Parse bootstrap admin emails from comma-separated string."""
         return [u.strip().lower() for u in self.BOOTSTRAP_ADMIN_USERS_STR.split(",") if u.strip()]
+
+    @property
+    def ALLOWED_EMAIL_DOMAINS(self) -> List[str]:
+        """Parse auto-approval email domains from comma-separated string."""
+        return [d.strip().lower() for d in self.ALLOWED_EMAIL_DOMAINS_STR.split(",") if d.strip()]
 
     @property
     def KICAD_PROJECTS_ROOT(self) -> str:
