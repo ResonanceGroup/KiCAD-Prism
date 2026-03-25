@@ -207,12 +207,39 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     ) -> None:
         """Issue the custom kicad_prism_session cookie after every fastapi-users login.
 
-        This bridges the fastapi-users auth backend to the existing
-        ``core/security.py`` RBAC guards, which read the custom HMAC-signed
-        session cookie rather than the fastapi-users JWT cookie.  Only users
-        with an active RBAC role receive the cookie; users awaiting admin
-        approval will not be able to access protected endpoints.
+        Also applies post-login checks:
+
+        - **Domain whitelist**: auto-approves the user as *viewer* in the RBAC
+          store if their email domain is in ``ALLOWED_EMAIL_DOMAINS`` and they
+          have not yet been assigned a role.  This is idempotent and serves as a
+          safety net in case the auto-approval during registration or OAuth
+          callback was skipped.
+
+        - **GitHub org check**: when ``GITHUB_ORG_LOGIN`` is configured and the
+          user has a linked GitHub OAuth account, the stored access token is used
+          to re-verify org membership.  This guards against users who have both
+          GitHub OAuth and email/password credentials and attempt to bypass the
+          OAuth-callback check by logging in with their password after their org
+          membership has been revoked.
+
+        Only users with an active RBAC role receive the custom session cookie;
+        users awaiting admin approval will not be able to access protected
+        endpoints.
         """
+        # Re-apply domain whitelist auto-approval in case it was skipped at
+        # registration or during a previous OAuth callback.
+        if _is_domain_whitelisted(user.email):
+            _auto_approve_in_rbac(user.email)
+
+        # GitHub org membership re-check for users with a linked GitHub account.
+        if settings.GITHUB_ORG_LOGIN:
+            github_account = next(
+                (acc for acc in (user.oauth_accounts or []) if acc.oauth_name == "github"),
+                None,
+            )
+            if github_account and github_account.access_token:
+                await _check_github_org_membership(github_account.access_token)
+
         if response is None:
             return
 
