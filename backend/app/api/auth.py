@@ -37,7 +37,9 @@ class AuthConfig(BaseModel):
     auth_enabled: bool
     dev_mode: bool
     google_client_id: str
+    github_client_id: str
     workspace_name: str
+    providers: list[str]
 
 
 def _guest_user_session() -> UserSession:
@@ -80,11 +82,21 @@ async def get_auth_config():
     This allows the frontend to know whether to show the login page
     or go directly to the gallery.
     """
+    providers: list[str] = []
+    if settings.GOOGLE_CLIENT_ID:
+        providers.append("google")
+    if settings.GITHUB_CLIENT_ID:
+        providers.append("github")
+    if settings.SESSION_SECRET:
+        providers.append("email")
+
     return AuthConfig(
         auth_enabled=settings.AUTH_ENABLED,
         dev_mode=settings.DEV_MODE,
         google_client_id=settings.GOOGLE_CLIENT_ID,
+        github_client_id=settings.GITHUB_CLIENT_ID,
         workspace_name=settings.WORKSPACE_NAME,
+        providers=providers,
     )
 
 

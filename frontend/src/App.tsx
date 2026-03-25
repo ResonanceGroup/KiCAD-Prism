@@ -17,6 +17,12 @@ const Workspace = lazy(() =>
 const ProjectDetailPage = lazy(() =>
     import('./pages/ProjectDetailPage').then((module) => ({ default: module.ProjectDetailPage }))
 );
+const ResetPasswordPage = lazy(() =>
+    import('./pages/ResetPasswordPage').then((module) => ({ default: module.ResetPasswordPage }))
+);
+const VerifyEmailPage = lazy(() =>
+    import('./pages/VerifyEmailPage').then((module) => ({ default: module.VerifyEmailPage }))
+);
 
 function RouteFallback() {
     return (
@@ -135,11 +141,11 @@ function App() {
 
     // If auth is enabled and no user, show login page
     if (authConfig?.auth_enabled && !user) {
-        // Fallback for missing client ID in config
-        if (!authConfig.google_client_id) {
+        // Fallback when no provider is configured
+        if (authConfig.providers.length === 0) {
             return (
                 <div className="flex items-center justify-center h-screen bg-background">
-                    <div className="text-red-500">Error: Missing Google Client ID in backend configuration.</div>
+                    <div className="text-red-500">Error: No authentication provider configured in backend.</div>
                 </div>
             );
         }
@@ -149,6 +155,8 @@ function App() {
                 <LoginPage
                     onLoginSuccess={setUser}
                     googleClientId={authConfig.google_client_id}
+                    githubClientId={authConfig.github_client_id}
+                    providers={authConfig.providers}
                     devMode={authConfig.dev_mode}
                     workspaceName={authConfig.workspace_name}
                     initialError={authError}
@@ -214,6 +222,22 @@ function App() {
                     element={
                         <Suspense fallback={<RouteFallback />}>
                             <ProjectDetailPage user={user} />
+                        </Suspense>
+                    }
+                />
+                <Route
+                    path="/reset-password"
+                    element={
+                        <Suspense fallback={<RouteFallback />}>
+                            <ResetPasswordPage />
+                        </Suspense>
+                    }
+                />
+                <Route
+                    path="/verify"
+                    element={
+                        <Suspense fallback={<RouteFallback />}>
+                            <VerifyEmailPage />
                         </Suspense>
                     }
                 />
