@@ -1,5 +1,9 @@
-from fastapi import FastAPI
+import uuid
+
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
+from fastapi_users.authentication import AuthenticationBackend, CookieTransport, JWTStrategy
 from app.api.auth import router as auth_router
 from app.api.projects import router as projects_router
 from app.api.comments import router as comments_router
@@ -7,6 +11,8 @@ from app.api.diff import router as diff_router
 from app.api.folders import router as folders_router
 from app.api.settings import router as settings_router
 from app.api.workspace import router as workspace_router
+from app.db.db import engine, get_user_db
+from app.db.models import Base, User
 from app.services.comments_store_service import initialize_comments_store
 from app.core.config import settings
 import subprocess
@@ -98,10 +104,50 @@ def ensure_ssh_dir():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     configure_git()
     ensure_ssh_dir()
     initialize_comments_store()
     yield
+
+
+# ---------------------------------------------------------------------------
+# FastAPIUsers – cookie transport backed by SESSION_SECRET (HttpOnly JWT)
+# ---------------------------------------------------------------------------
+
+class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
+    reset_password_token_secret = settings.SESSION_SECRET
+    verification_token_secret = settings.SESSION_SECRET
+
+
+async def get_user_manager(user_db=Depends(get_user_db)):
+    yield UserManager(user_db)
+
+
+cookie_transport = CookieTransport(
+    cookie_httponly=True,
+    cookie_secure=settings.SESSION_COOKIE_SECURE,
+)
+
+
+def get_jwt_strategy() -> JWTStrategy:
+    return JWTStrategy(
+        secret=settings.SESSION_SECRET,
+        lifetime_seconds=settings.SESSION_TTL_HOURS * 3600,
+    )
+
+
+auth_backend = AuthenticationBackend(
+    name="cookie",
+    transport=cookie_transport,
+    get_strategy=get_jwt_strategy,
+)
+
+fastapi_users = FastAPIUsers[User, uuid.UUID](
+    get_user_manager,
+    [auth_backend],
+)
 
 app = FastAPI(title="KiCAD Prism API", lifespan=lifespan)
 
