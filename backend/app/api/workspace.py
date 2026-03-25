@@ -25,16 +25,33 @@ async def get_workspace_bootstrap(
 ):
     all_projects = folder_service.filter_projects_for_role(project_service.get_registered_projects(), user.role)
 
-    # Viewers only see projects they have explicit membership in.
-    # The Discover tab is where they find and request access to other projects.
-    if user.role == "viewer" and not project_acl_service._is_bootstrap_admin(user.email):
+    is_bootstrap_admin = project_acl_service._is_bootstrap_admin(user.email)
+
+    if is_bootstrap_admin:
+        # Bootstrap admin sees everything.
+        projects = all_projects
+    elif user.role == "viewer":
+        # Viewers only see projects they have explicit membership in.
+        # The Discover tab is where they find and request access to other projects.
         accessible = []
         for p in all_projects:
             m = await project_acl_service.get_membership(session, p.id, user.email)
             if m:
                 accessible.append(p)
         projects = accessible
+    elif user.role == "designer":
+        # Designers see public projects freely; private projects only if they have membership.
+        accessible = []
+        for p in all_projects:
+            if p.visibility == "private":
+                m = await project_acl_service.get_membership(session, p.id, user.email)
+                if m:
+                    accessible.append(p)
+            else:
+                accessible.append(p)
+        projects = accessible
     else:
+        # Admins see all non-hidden projects.
         projects = all_projects
 
     access_map: Dict[str, bool] = {p.id: True for p in projects}

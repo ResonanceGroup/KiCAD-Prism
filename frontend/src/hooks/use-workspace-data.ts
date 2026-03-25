@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchApi, fetchJson, readApiError } from "@/lib/api";
 import { FolderTreeItem, Project } from "@/types/project";
@@ -35,9 +35,12 @@ export function useWorkspaceData(): WorkspaceDataState {
   const [accessMap, setAccessMap] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const initialLoadDone = useRef(false);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    if (!initialLoadDone.current) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -50,6 +53,7 @@ export function useWorkspaceData(): WorkspaceDataState {
       setFolders(data.folders);
       setAccessMap(data.access_map ?? {});
       setError(null);
+      initialLoadDone.current = true;
     } catch (error) {
       setProjects([]);
       setFolders([]);
