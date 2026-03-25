@@ -141,6 +141,29 @@ function App() {
 
     // If auth is enabled and no user, show login page
     if (authConfig?.auth_enabled && !user) {
+        // Allow unauthenticated access to password-reset and email-verify pages
+        const publicPath = window.location.pathname;
+        if (publicPath === '/reset-password') {
+            return (
+                <BrowserRouter>
+                    <Toaster richColors position="top-right" />
+                    <Suspense fallback={<RouteFallback />}>
+                        <ResetPasswordPage />
+                    </Suspense>
+                </BrowserRouter>
+            );
+        }
+        if (publicPath === '/verify') {
+            return (
+                <BrowserRouter>
+                    <Toaster richColors position="top-right" />
+                    <Suspense fallback={<RouteFallback />}>
+                        <VerifyEmailPage />
+                    </Suspense>
+                </BrowserRouter>
+            );
+        }
+
         // Fallback when no provider is configured
         if (authConfig.providers.length === 0) {
             return (

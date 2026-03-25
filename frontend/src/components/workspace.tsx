@@ -10,6 +10,7 @@ import { useWorkspaceData } from "@/hooks/use-workspace-data";
 import { useWorkspaceSearch } from "@/hooks/use-workspace-search";
 import { WorkspaceAppsPlaceholder } from "./workspace/workspace-apps-placeholder";
 import { WorkspaceBreadcrumbs } from "./workspace/workspace-breadcrumbs";
+import { WorkspaceDiscoverView } from "./workspace/workspace-discover-view";
 import { WorkspaceGalleryView } from "./workspace/workspace-gallery-view";
 import { WorkspaceListView } from "./workspace/workspace-list-view";
 import { WorkspaceLoadingState } from "./workspace/workspace-loading-state";
@@ -18,6 +19,9 @@ import { WorkspaceProjectToolbar } from "./workspace/workspace-project-toolbar";
 import { WorkspaceSidebar } from "./workspace/workspace-sidebar";
 import { WorkspaceSection, ViewMode } from "./workspace/workspace-types";
 
+const CreateProjectDialog = lazy(() =>
+  import("./create-project-dialog").then((module) => ({ default: module.CreateProjectDialog }))
+);
 const ImportDialog = lazy(() =>
   import("./import-dialog").then((module) => ({ default: module.ImportDialog }))
 );
@@ -57,6 +61,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [isCreateFolderOpen, setIsCreateFolderOpen] = useState(false);
@@ -299,6 +304,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
                 viewMode={viewMode}
                 onViewModeChange={setViewMode}
                 onImport={() => canManageProjects && setIsImportOpen(true)}
+                onCreateProject={() => canManageProjects && setIsCreateProjectOpen(true)}
                 onCreateFolder={() => canManageProjects && setIsCreateFolderOpen(true)}
                 onRefresh={() => void refresh()}
                 onOpenSettings={() => canOpenSettings && setIsSettingsOpen(true)}
@@ -313,6 +319,10 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
               <WorkspaceLoadingState />
             ) : section === "apps" ? (
               <WorkspaceAppsPlaceholder />
+            ) : section === "discover" ? (
+              <div className="p-6">
+                <WorkspaceDiscoverView user={user} />
+              </div>
             ) : (
               <div className="flex h-full min-h-0 flex-col p-6">
                 <WorkspaceBreadcrumbs
@@ -390,6 +400,15 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
       {isImportOpen && (
         <Suspense fallback={null}>
           <ImportDialog open={isImportOpen} onOpenChange={setIsImportOpen} onImportComplete={refresh} />
+        </Suspense>
+      )}
+      {isCreateProjectOpen && (
+        <Suspense fallback={null}>
+          <CreateProjectDialog
+            open={isCreateProjectOpen}
+            onOpenChange={setIsCreateProjectOpen}
+            onCreated={refresh}
+          />
         </Suspense>
       )}
       {isSettingsOpen && (

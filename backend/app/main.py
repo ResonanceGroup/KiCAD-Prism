@@ -11,6 +11,7 @@ from app.api.auth import router as auth_router
 from app.api.comments import router as comments_router
 from app.api.diff import router as diff_router
 from app.api.folders import router as folders_router
+from app.api.project_acl import router as project_acl_router
 from app.api.projects import router as projects_router
 from app.api.settings import router as settings_router
 from app.api.workspace import router as workspace_router
@@ -22,7 +23,7 @@ from app.auth import (
     github_oauth_client,
 )
 from app.core.config import settings
-from app.db.db import engine
+from app.db.db import async_session_maker, engine
 from app.db.models import Base
 from app.services.comments_store_service import initialize_comments_store
 
@@ -105,6 +106,40 @@ def ensure_ssh_dir():
     except OSError as error:
         logger.error("Failed to configure SSH directory: %s", error)
 
+async def ensure_admin_user() -> None:
+    """Auto-create the bootstrap admin account on first startup.
+
+    Only runs when both ADMIN_EMAIL and ADMIN_PASSWORD are set in the environment.
+    If the account already exists the function is a no-op, so restarts are safe.
+    """
+    if not settings.ADMIN_EMAIL or not settings.ADMIN_PASSWORD:
+        return
+
+    from sqlalchemy import select
+    from fastapi_users.db import SQLAlchemyUserDatabase
+    from app.db.models import OAuthAccount, User
+    from app.auth import UserCreate, UserManager
+
+    async with async_session_maker() as session:
+        user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
+        stmt = select(User).where(User.email == settings.ADMIN_EMAIL.strip().lower())
+        result = await session.execute(stmt)
+        if result.unique().scalar_one_or_none() is not None:
+            logger.debug("Bootstrap admin %s already exists; skipping creation.", settings.ADMIN_EMAIL)
+            return
+
+        manager = UserManager(user_db)
+        await manager.create(
+            UserCreate(
+                email=settings.ADMIN_EMAIL.strip().lower(),
+                password=settings.ADMIN_PASSWORD,
+                is_verified=True,
+            ),
+            safe=False,
+        )
+        logger.info("Bootstrap admin account created: %s", settings.ADMIN_EMAIL)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -113,6 +148,7 @@ async def lifespan(app: FastAPI):
     configure_git()
     ensure_ssh_dir()
     initialize_comments_store()
+    await ensure_admin_user()
     yield
 
 
@@ -130,6 +166,7 @@ app.add_middleware(
 # Include Routers
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
+app.include_router(project_acl_router, prefix="/api/projects", tags=["project-acl"])
 app.include_router(comments_router, prefix="/api/projects", tags=["comments"])
 app.include_router(diff_router, prefix="/api/projects", tags=["diff"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
@@ -151,6 +188,11 @@ app.include_router(
 )
 app.include_router(
     fastapi_users_instance.get_reset_password_router(),
+    prefix="/api/auth/email",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users_instance.get_verify_router(UserRead),
     prefix="/api/auth/email",
     tags=["auth"],
 )

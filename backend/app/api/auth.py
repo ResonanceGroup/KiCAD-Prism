@@ -4,6 +4,9 @@ Authentication API endpoints.
 Handles Google OAuth login and domain validation.
 """
 import logging
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -22,6 +25,12 @@ logger = logging.getLogger(__name__)
 class TokenRequest(BaseModel):
     """Request body for login endpoint."""
     token: str = Field(min_length=1)
+
+
+# TODO: TESTING ONLY — remove before production
+class TestEmailRequest(BaseModel):
+    """Request body for SMTP test endpoint."""
+    email: str = Field(min_length=3)
 
 
 class UserSession(BaseModel):
@@ -178,3 +187,60 @@ async def get_current_session_user(user: AuthenticatedUser = Depends(get_current
 async def logout(response: Response):
     clear_session_cookie(response)
     return {"success": True}
+
+
+# TODO: TESTING ONLY — remove this endpoint before production
+@router.post("/test-email")
+async def send_test_email(request: TestEmailRequest):
+    """Send a test email to verify SMTP configuration. FOR TESTING ONLY."""
+    if not settings.SMTP_HOST:
+        raise HTTPException(status_code=400, detail="SMTP is not configured (SMTP_HOST is empty)")
+
+    from_addr = settings.SMTP_FROM or settings.SMTP_USER
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "KiCAD Prism \u2014 SMTP Test"
+    msg["From"] = from_addr
+    msg["To"] = request.email
+    msg.attach(MIMEText(
+        "<p>This is a test email from <strong>KiCAD Prism</strong>.</p>"
+        "<p>If you received this, your SMTP configuration is working correctly.</p>",
+        "html",
+    ))
+
+    try:
+        if settings.SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
+                if settings.SMTP_USER and settings.SMTP_PASS:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
+                if settings.SMTP_TLS:
+                    smtp.starttls()
+                if settings.SMTP_USER and settings.SMTP_PASS:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+                smtp.send_message(msg)
+        return {"success": True, "message": f"Test email sent to {request.email}"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"SMTP error: {exc}")
+
+
+@router.get("/users/search")
+async def search_users(
+    q: str = "",
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Return user emails matching the query string (for @mention autocomplete).
+    Returns at most 10 results. Requires a logged-in user.
+    """
+    if not q or len(q) < 1:
+        return []
+    q_lower = q.lower()
+    assignments = access_service.list_role_assignments()
+    results = [
+        {"email": a["email"]}
+        for a in assignments
+        if q_lower in a["email"].lower()
+    ]
+    return results[:10]

@@ -2,7 +2,7 @@ import { Project } from "@/types/project";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CalendarDays, Box, Trash2 } from "lucide-react";
+import { CalendarDays, Box, Trash2, Globe, Lock, EyeOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import React from "react";
 
@@ -16,6 +16,22 @@ interface ProjectCardProps {
     showDelete?: boolean;
     searchQuery?: string;
     actions?: React.ReactNode;
+}
+
+function VisibilityBadge({ visibility }: { visibility?: "public" | "private" | "hidden" }) {
+    if (!visibility || visibility === "public") return null;
+    if (visibility === "private") {
+        return (
+            <Badge variant="outline" className="backdrop-blur-sm bg-background/80 border text-[10px] gap-1">
+                <Lock className="h-2.5 w-2.5" /> Private
+            </Badge>
+        );
+    }
+    return (
+        <Badge variant="outline" className="backdrop-blur-sm bg-background/80 border text-[10px] gap-1">
+            <EyeOff className="h-2.5 w-2.5" /> Hidden
+        </Badge>
+    );
 }
 
 // Highlight matched text in search results
@@ -124,6 +140,7 @@ export function ProjectCard({
                     <Badge variant="secondary" className="backdrop-blur-sm bg-background/80 border text-[10px]">
                         Git
                     </Badge>
+                    <VisibilityBadge visibility={project.visibility} />
                     {actions ? (
                         <div
                             onClick={(event) => event.stopPropagation()}
@@ -160,6 +177,21 @@ export function ProjectCard({
             <CardFooter className="p-4 pt-0 border-t-0 text-[11px] text-muted-foreground flex items-center gap-2">
                 <CalendarDays className="h-3.5 w-3.5" />
                 <span>Updated {project.last_modified}</span>
+                {project.visibility === "public" && (
+                    <span className="ml-auto flex items-center gap-1 text-green-600 dark:text-green-400">
+                        <Globe className="h-3 w-3" /> Public
+                    </span>
+                )}
+                {project.visibility === "private" && (
+                    <span className="ml-auto flex items-center gap-1 text-yellow-600 dark:text-yellow-400">
+                        <Lock className="h-3 w-3" /> Private
+                    </span>
+                )}
+                {project.visibility === "hidden" && (
+                    <span className="ml-auto flex items-center gap-1 text-muted-foreground">
+                        <EyeOff className="h-3 w-3" /> Hidden
+                    </span>
+                )}
             </CardFooter>
         </Card>
     );

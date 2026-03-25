@@ -1,14 +1,22 @@
-from typing import List
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 import os
 import subprocess
 from pathlib import Path
 from pydantic import BaseModel
 import logging
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.roles import Role, normalize_role
 from app.core.security import AuthenticatedUser, require_admin
+from app.db.db import get_async_session
+from app.db.models import User
 from app.services import access_service
 
 # Configure logging
@@ -156,3 +164,184 @@ async def delete_access_user(email: str, user: AuthenticatedUser = Depends(requi
         raise HTTPException(status_code=404, detail="User role assignment not found")
 
     return {"deleted": email.strip().lower()}
+
+
+# ---------------------------------------------------------------------------
+# Pending-approvals endpoints
+# ---------------------------------------------------------------------------
+
+class PendingUserResponse(BaseModel):
+    email: str
+    registered_at: str
+
+
+@router.get("/pending-users", response_model=List[PendingUserResponse])
+async def list_pending_users(session: AsyncSession = Depends(get_async_session)):
+    """List all users awaiting admin approval.
+
+    Merges the explicit pending queue with any DB accounts that have no RBAC
+    role assigned (e.g. users who registered before the queue was introduced).
+    Bootstrap admins are always excluded.
+    """
+    from app.core.config import settings as app_settings
+
+    # Start with the explicit pending queue (has registered_at timestamps).
+    queued = {item["email"]: item for item in access_service.list_pending_users()}
+
+    # Also find DB users with no role who aren't bootstrap admins.
+    result = await session.execute(select(User))
+    db_users = result.unique().scalars().all()
+    bootstrap = {e.strip().lower() for e in app_settings.BOOTSTRAP_ADMIN_USERS if e.strip()}
+    for db_user in db_users:
+        email = db_user.email.strip().lower()
+        if email in bootstrap:
+            continue
+        if access_service.resolve_user_role(email) is not None:
+            continue
+        if email not in queued:
+            # Back-fill into the queue so approve/deny work normally.
+            try:
+                access_service.add_pending_user(email)
+            except Exception:
+                pass
+            queued[email] = {"email": email, "registered_at": ""}
+
+    return [PendingUserResponse(**item) for item in queued.values()]
+
+
+@router.post("/pending-users/{email}/approve")
+async def approve_pending_user(
+    email: str,
+    user: AuthenticatedUser = Depends(require_admin),
+):
+    """Approve a pending registration: assign viewer role and notify the user."""
+    normalized = email.strip().lower()
+    try:
+        access_service.upsert_user_role(normalized, "viewer", user.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    access_service.remove_pending_user(normalized)
+    from app.auth import _send_smtp_email
+    await _send_smtp_email(
+        to=normalized,
+        subject="Your KiCAD Prism account has been approved",
+        body_html=(
+            "<p>Your KiCAD Prism account registration has been approved.</p>"
+            "<p>You can now sign in and access the workspace.</p>"
+        ),
+    )
+    return {"approved": normalized}
+
+
+@router.post("/pending-users/{email}/deny")
+async def deny_pending_user(
+    email: str,
+    user: AuthenticatedUser = Depends(require_admin),
+):
+    """Deny a pending registration: remove from queue and notify the user."""
+    normalized = email.strip().lower()
+    access_service.remove_pending_user(normalized)
+    from app.auth import _send_smtp_email
+    await _send_smtp_email(
+        to=normalized,
+        subject="Your KiCAD Prism account registration",
+        body_html=(
+            "<p>Your KiCAD Prism account registration has been reviewed.</p>"
+            "<p>Unfortunately, access has been denied at this time.</p>"
+            "<p>Please contact your administrator for more information.</p>"
+        ),
+    )
+    return {"denied": normalized}
+
+
+# ---------------------------------------------------------------------------
+# Registered users list
+# ---------------------------------------------------------------------------
+
+class UserListResponse(BaseModel):
+    email: str
+    is_active: bool
+    is_verified: bool
+    role: Optional[str] = None
+
+
+@router.get("/users", response_model=List[UserListResponse])
+async def list_all_users(session: AsyncSession = Depends(get_async_session)):
+    """List all registered user accounts."""
+    result = await session.execute(select(User))
+    users = result.unique().scalars().all()
+    assignments = {a["email"].lower(): a["role"] for a in access_service.list_role_assignments()}
+    return [
+        UserListResponse(
+            email=u.email,
+            is_active=u.is_active,
+            is_verified=u.is_verified,
+            role=assignments.get(u.email.lower()),
+        )
+        for u in users
+    ]
+
+
+@router.post("/users/{email}/resend-verification")
+async def resend_verification_email(
+    email: str,
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Re-send the email verification link for an unverified user account."""
+    from fastapi_users.db import SQLAlchemyUserDatabase
+    from app.db.models import OAuthAccount
+    from app.auth import UserManager
+
+    normalized = email.strip().lower()
+    result = await session.execute(select(User).where(User.email == normalized))
+    user = result.unique().scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.is_verified:
+        raise HTTPException(status_code=400, detail="User is already verified")
+
+    user_db = SQLAlchemyUserDatabase(session, User, OAuthAccount)
+    manager = UserManager(user_db)
+    try:
+        await manager.request_verify(user, request)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to send verification email: {exc}")
+    return {"sent": normalized}
+
+
+# ---------------------------------------------------------------------------
+# SMTP test
+# ---------------------------------------------------------------------------
+
+@router.post("/smtp/test")
+async def test_smtp(user: AuthenticatedUser = Depends(require_admin)):
+    """Send a test email to the requesting admin to verify SMTP configuration."""
+    if not settings.SMTP_HOST:
+        raise HTTPException(status_code=400, detail="SMTP is not configured (SMTP_HOST is empty)")
+    from_addr = settings.SMTP_FROM or settings.SMTP_USER
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "KiCAD Prism — SMTP Test"
+    msg["From"] = from_addr
+    msg["To"] = user.email
+    msg.attach(MIMEText(
+        "<p>This is a test email from <strong>KiCAD Prism</strong>.</p>"
+        "<p>If you received this, your SMTP configuration is working correctly.</p>",
+        "html",
+    ))
+    try:
+        if settings.SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
+                if settings.SMTP_USER and settings.SMTP_PASS:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
+                if settings.SMTP_TLS:
+                    smtp.starttls()
+                if settings.SMTP_USER and settings.SMTP_PASS:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+                smtp.send_message(msg)
+        return {"success": True, "message": f"Test email sent to {user.email}"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"SMTP error: {exc}")

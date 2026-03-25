@@ -14,6 +14,12 @@ from pydantic import BaseModel
 
 from app.services import path_config_service
 
+VISIBILITY_PUBLIC = "public"
+VISIBILITY_PRIVATE = "private"
+VISIBILITY_HIDDEN = "hidden"
+VISIBILITY_VALUES = (VISIBILITY_PUBLIC, VISIBILITY_PRIVATE, VISIBILITY_HIDDEN)
+
+
 class Project(BaseModel):
     id: str
     name: str
@@ -30,6 +36,7 @@ class Project(BaseModel):
     parent_repo_path: Optional[str] = None  # Path to parent repo for Type-2
     folder_id: Optional[str] = None  # Optional folder assignment for workspace organization
     portfolio: Optional[Dict[str, Any]] = None  # Portfolio scene/detail metadata
+    visibility: str = VISIBILITY_PUBLIC  # public / private / hidden
 
 
 class RegisteredProjectRecord(BaseModel):
@@ -45,6 +52,7 @@ class RegisteredProjectRecord(BaseModel):
     import_type: Optional[str] = None
     parent_repo_path: Optional[str] = None
     folder_id: Optional[str] = None
+    visibility: str = VISIBILITY_PUBLIC
 
 # PROJECTS_ROOT is where imported projects are stored.
 # In Docker, this should be a persistent volume mount.
@@ -101,7 +109,8 @@ def invalidate_project_caches() -> None:
 
 def register_project(project_id: str, name: str, path: str, repo_url: str,
                      sub_path: Optional[str] = None, parent_repo: Optional[str] = None,
-                     description: Optional[str] = None, folder_id: Optional[str] = None) -> None:
+                     description: Optional[str] = None, folder_id: Optional[str] = None,
+                     visibility: Optional[str] = None) -> None:
     """Register a project in the registry."""
     registry = _load_project_registry()
     
@@ -121,10 +130,24 @@ def register_project(project_id: str, name: str, path: str, repo_url: str,
         "description": description or f"Project {name}",
         "last_modified": last_modified,
         "registered_at": datetime.datetime.now().isoformat(),
-        "folder_id": folder_id
+        "folder_id": folder_id,
+        "visibility": visibility if visibility in VISIBILITY_VALUES else VISIBILITY_PUBLIC,
     }
     
     _save_project_registry(registry)
+
+
+def update_project_visibility(project_id: str, visibility: str) -> bool:
+    """Update the visibility field of an existing project. Returns False if not found."""
+    if visibility not in VISIBILITY_VALUES:
+        raise ValueError(f"visibility must be one of {VISIBILITY_VALUES}")
+    registry = _load_project_registry()
+    if project_id not in registry:
+        return False
+    registry[project_id]["visibility"] = visibility
+    _save_project_registry(registry)
+    return True
+
 
 def _normalize_path(path: str) -> str:
     """
@@ -262,6 +285,7 @@ def _record_to_project(record: RegisteredProjectRecord) -> Project:
         parent_repo_path=record.parent_repo_path,
         folder_id=record.folder_id,
         portfolio=portfolio,
+        visibility=record.visibility,
     )
 
 
@@ -300,6 +324,7 @@ def get_registered_project_records() -> List[RegisteredProjectRecord]:
                     else None
                 ),
                 folder_id=data.get("folder_id"),
+                visibility=data.get("visibility", VISIBILITY_PUBLIC),
             )
         )
 

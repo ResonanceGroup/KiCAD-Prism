@@ -6,6 +6,7 @@ comments.json is generated from DB only during push/export workflows.
 """
 
 import os
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -83,6 +84,41 @@ def _normalize_context(context: str) -> str:
     return normalized
 
 
+# ---------------------------------------------------------------------------
+# @mention notification helper
+# ---------------------------------------------------------------------------
+
+_MENTION_RE = re.compile(r"@([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})", re.IGNORECASE)
+
+
+async def _notify_mentions(
+    content: str,
+    author: str,
+    project_name: str,
+    project_id: str,
+) -> None:
+    """Parse @email mentions in comment text and send email notifications."""
+    mentioned = set(_MENTION_RE.findall(content))
+    mentioned.discard(author.lower())
+    if not mentioned:
+        return
+    try:
+        from app.auth import _send_smtp_email
+        for email in mentioned:
+            await _send_smtp_email(
+                to=email,
+                subject=f"You were mentioned in a comment on {project_name}",
+                body_html=(
+                    f"<p><strong>{author}</strong> mentioned you in a comment on "
+                    f"project <strong>{project_name}</strong>:</p>"
+                    f"<blockquote>{content}</blockquote>"
+                    "<p>Sign in to KiCAD Prism to view the full discussion.</p>"
+                ),
+            )
+    except Exception:
+        pass  # notification failure is non-fatal
+
+
 def _normalize_content(content: str, *, field: str = "content") -> str:
     normalized = content.strip()
     if not normalized:
@@ -117,7 +153,7 @@ async def create_comment(
     context = _normalize_context(request.context)
     content = _normalize_content(request.content)
 
-    return comments_store.create_comment(
+    result = comments_store.create_comment(
         project_id=project.id,
         project_path=project.path,
         context=context,
@@ -125,6 +161,14 @@ async def create_comment(
         content=content,
         author=_normalize_author(request.author),
     )
+
+    await _notify_mentions(
+        content=content,
+        author=user.email,
+        project_name=project.display_name or project.name,
+        project_id=project.id,
+    )
+    return result
 
 
 @router.patch("/{project_id}/comments/{comment_id}", dependencies=[Depends(require_designer)])
@@ -183,6 +227,13 @@ async def add_reply(
         raise HTTPException(status_code=404, detail="Comment not found")
 
     comment, reply = result
+
+    await _notify_mentions(
+        content=_normalize_content(request.content),
+        author=user.email,
+        project_name=project.display_name or project.name,
+        project_id=project.id,
+    )
     return {"comment": comment, "reply": reply}
 
 

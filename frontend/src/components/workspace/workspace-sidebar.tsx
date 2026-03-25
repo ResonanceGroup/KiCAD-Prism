@@ -1,4 +1,4 @@
-import { AppWindow, Folder, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { AppWindow, Compass, Folder, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -57,6 +57,16 @@ export function WorkspaceSidebar({
         >
           <AppWindow className="h-4 w-4" />
           {!isCollapsed && <span>Apps &amp; Integrations</span>}
+        </Button>
+
+        <Button
+          variant={section === "discover" ? "secondary" : "ghost"}
+          className={cn("w-full justify-start gap-2", isCollapsed && "justify-center px-2")}
+          onClick={() => onSectionChange("discover")}
+          aria-label="Discover Projects"
+        >
+          <Compass className="h-4 w-4" />
+          {!isCollapsed && <span>Discover</span>}
         </Button>
       </div>
     </aside>

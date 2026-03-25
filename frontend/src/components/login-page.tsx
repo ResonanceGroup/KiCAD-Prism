@@ -149,16 +149,25 @@ export function LoginPage({
       setIsLoading(true);
       setError(null);
 
+      // fastapi-users login expects OAuth2 form-encoded body, not JSON
+      const formData = new URLSearchParams();
+      formData.append("username", emailValue);
+      formData.append("password", passwordValue);
+
       const response = await fetch("/api/auth/email/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
         credentials: "include",
-        body: JSON.stringify({ username: emailValue, password: passwordValue }),
+        body: formData.toString(),
       });
 
       if (!response.ok) {
         const errorPayload = await response.json();
-        throw new Error(errorPayload.detail || "Sign in failed");
+        const detail = errorPayload.detail;
+        const message = Array.isArray(detail)
+          ? detail.map((e: any) => e.msg ?? String(e)).join("; ")
+          : detail || "Sign in failed";
+        throw new Error(message);
       }
 
       // After login, fetch current user session
@@ -167,6 +176,13 @@ export function LoginPage({
       });
 
       if (!meResponse.ok) {
+        if (meResponse.status === 403) {
+          const payload = await meResponse.json().catch(() => null) as { detail?: string } | null;
+          throw new Error(
+            payload?.detail ||
+            "Your account is pending admin approval. You will be notified when access is granted."
+          );
+        }
         throw new Error("Failed to retrieve session after login");
       }
 

@@ -68,12 +68,18 @@ async def _send_smtp_email(to: str, subject: str, body_html: str) -> None:
         msg["From"] = from_addr
         msg["To"] = to
         msg.attach(MIMEText(body_html, "html"))
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
-            if settings.SMTP_TLS:
-                smtp.starttls()
-            if settings.SMTP_USER and settings.SMTP_PASS:
-                smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
-            smtp.send_message(msg)
+        if settings.SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
+                if settings.SMTP_USER and settings.SMTP_PASS:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
+                if settings.SMTP_TLS:
+                    smtp.starttls()
+                if settings.SMTP_USER and settings.SMTP_PASS:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+                smtp.send_message(msg)
         logger.info("Email sent to %s", to)
     except Exception as exc:
         logger.error("Failed to send email to %s: %s", to, exc)
@@ -100,6 +106,32 @@ def _auto_approve_in_rbac(email: str) -> None:
             logger.info("Auto-approved %s as viewer (domain whitelisted)", email)
         except Exception as exc:
             logger.error("Failed to auto-approve %s in RBAC: %s", email, exc)
+
+
+async def _notify_admins_new_registration(new_user_email: str) -> None:
+    """Email all current admins when a non-whitelisted user registers."""
+    admin_emails: list[str] = list(settings.BOOTSTRAP_ADMIN_USERS)
+    try:
+        for assignment in access_service.list_role_assignments():
+            if assignment.get("role") == "admin":
+                addr = assignment["email"]
+                if addr not in admin_emails:
+                    admin_emails.append(addr)
+    except Exception:
+        pass
+    for admin_email in admin_emails:
+        if not admin_email:
+            continue
+        await _send_smtp_email(
+            to=admin_email,
+            subject="KiCAD Prism — New registration pending approval",
+            body_html=(
+                f"<p>A new user has registered and is awaiting your approval:</p>"
+                f"<p><strong>{new_user_email}</strong></p>"
+                "<p>Sign in as an admin and go to "
+                "<em>Settings → Pending Approvals</em> to approve or deny this request.</p>"
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -162,17 +194,28 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         """
         if _is_domain_whitelisted(user.email):
             _auto_approve_in_rbac(user.email)
+        elif access_service.resolve_user_role(user.email) is not None:
+            # Bootstrap admin or already has a role — skip pending queue.
+            pass
         else:
-            logger.info(
-                "User %s registered without auto-approval; "
-                "awaiting admin role assignment.",
-                user.email,
-            )
+            try:
+                access_service.add_pending_user(user.email)
+            except Exception as exc:
+                logger.error("Failed to add %s to pending queue: %s", user.email, exc)
+            await _notify_admins_new_registration(user.email)
+
+        if not user.is_verified:
+            try:
+                await self.request_verify(user, request)
+            except Exception as exc:
+                logger.warning("Could not send verification email to %s: %s", user.email, exc)
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
     ) -> None:
-        base = str(request.base_url).rstrip("/") if request else ""
+        base = settings.APP_URL.rstrip("/") if settings.APP_URL else (
+            str(request.base_url).rstrip("/") if request else ""
+        )
         reset_url = f"{base}/reset-password?token={token}"
         await _send_smtp_email(
             to=user.email,
@@ -188,7 +231,9 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     async def on_after_request_verify(
         self, user: User, token: str, request: Optional[Request] = None
     ) -> None:
-        base = str(request.base_url).rstrip("/") if request else ""
+        base = settings.APP_URL.rstrip("/") if settings.APP_URL else (
+            str(request.base_url).rstrip("/") if request else ""
+        )
         verify_url = f"{base}/verify?token={token}"
         await _send_smtp_email(
             to=user.email,
@@ -246,7 +291,10 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
 
         role = access_service.resolve_user_role(user.email)
         if role is None:
-            return
+            raise HTTPException(
+                status_code=403,
+                detail="Your account is pending admin approval. You will be notified when access is granted.",
+            )
 
         name = user.email.split("@")[0]
         token = create_session_token(email=user.email, name=name, picture="", role=role)

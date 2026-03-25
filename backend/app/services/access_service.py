@@ -146,3 +146,39 @@ def delete_user_role(email: str, updated_by: str) -> bool:
     payload["updated_by"] = _normalize_email(updated_by)
     _save_role_store(payload)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Pending-approvals queue
+# ---------------------------------------------------------------------------
+
+def add_pending_user(email: str) -> None:
+    """Add an email to the pending-approvals queue if not already present."""
+    normalized = _normalize_email(email)
+    payload = _load_role_store()
+    pending = payload.setdefault("pending", {})
+    if normalized not in pending:
+        pending[normalized] = {"registered_at": _now_iso()}
+        payload["updated_at"] = _now_iso()
+        _save_role_store(payload)
+
+
+def list_pending_users() -> list[dict[str, str]]:
+    """Return all entries in the pending-approvals queue."""
+    payload = _load_role_store()
+    pending = payload.get("pending") or {}
+    return [
+        {"email": email, "registered_at": info.get("registered_at", "")}
+        for email, info in pending.items()
+    ]
+
+
+def remove_pending_user(email: str) -> None:
+    """Remove an email from the pending-approvals queue."""
+    normalized = _normalize_email(email)
+    payload = _load_role_store()
+    pending = payload.setdefault("pending", {})
+    if normalized in pending:
+        pending.pop(normalized)
+        payload["updated_at"] = _now_iso()
+        _save_role_store(payload)

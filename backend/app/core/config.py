@@ -52,10 +52,23 @@ class Settings(BaseSettings):
         description="Comma-separated list of allowed email domains"
     )
 
-    # Comma-separated list of bootstrap admin user emails.
+    # Primary admin email - always has admin access and receives system notifications.
+    ADMIN_EMAIL: str = Field(
+        default="",
+        description="Primary admin email address. Always grants admin role and receives system notifications."
+    )
+
+    # Password for the auto-created admin account. Only used on first startup to seed
+    # the account; changing this value later has no effect on an existing account.
+    ADMIN_PASSWORD: str = Field(
+        default="",
+        description="Password for the bootstrap admin account. Used only on initial account creation."
+    )
+
+    # Comma-separated list of additional bootstrap admin user emails.
     BOOTSTRAP_ADMIN_USERS_STR: str = Field(
         default="",
-        description="Comma-separated list of admin user emails provisioned from env"
+        description="Comma-separated list of additional admin user emails provisioned from env"
     )
 
     # Path to persistent role assignment JSON file.
@@ -189,6 +202,15 @@ class Settings(BaseSettings):
             "If empty, URL helpers derive host from the incoming request."
         ),
     )
+
+    # Public-facing frontend URL used in verification and password-reset emails.
+    # Set this to the URL users open in their browser (e.g. https://prism.yourcompany.com).
+    # If empty, the backend request's base_url is used as a fallback (works only when
+    # the frontend and API are served on the same origin).
+    APP_URL: str = Field(
+        default="",
+        description="Public frontend URL for email deep-links (e.g. https://prism.yourcompany.com)."
+    )
     
     # ===========================================
     # Computed Properties
@@ -205,8 +227,19 @@ class Settings(BaseSettings):
 
     @property
     def BOOTSTRAP_ADMIN_USERS(self) -> List[str]:
-        """Parse bootstrap admin emails from comma-separated string."""
-        return [u.strip().lower() for u in self.BOOTSTRAP_ADMIN_USERS_STR.split(",") if u.strip()]
+        """All hardcoded admin emails: ADMIN_EMAIL plus any in BOOTSTRAP_ADMIN_USERS_STR."""
+        admins: list[str] = []
+        if self.ADMIN_EMAIL.strip():
+            admins.append(self.ADMIN_EMAIL.strip().lower())
+        admins.extend(u.strip().lower() for u in self.BOOTSTRAP_ADMIN_USERS_STR.split(",") if u.strip())
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        result: list[str] = []
+        for email in admins:
+            if email not in seen:
+                seen.add(email)
+                result.append(email)
+        return result
 
     @property
     def ALLOWED_EMAIL_DOMAINS(self) -> List[str]:

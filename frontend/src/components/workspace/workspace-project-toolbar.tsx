@@ -1,4 +1,4 @@
-import { FolderPlus, Grid3X3, List, Plus, RefreshCw, Settings } from "lucide-react";
+import { FolderPlus, Grid3X3, List, Plus, RefreshCw, Settings, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -8,6 +8,7 @@ interface WorkspaceProjectToolbarProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   onImport: () => void;
+  onCreateProject: () => void;
   onCreateFolder: () => void;
   onRefresh: () => void;
   onOpenSettings: () => void;
@@ -19,6 +20,7 @@ export function WorkspaceProjectToolbar({
   viewMode,
   onViewModeChange,
   onImport,
+  onCreateProject,
   onCreateFolder,
   onRefresh,
   onOpenSettings,
@@ -49,9 +51,13 @@ export function WorkspaceProjectToolbar({
       <div className="ml-auto flex items-center gap-2">
         {canManageProjects && (
           <>
-            <Button onClick={onImport}>
+            <Button onClick={onCreateProject}>
               <Plus className="mr-2 h-4 w-4" />
-              Import Project
+              New Project
+            </Button>
+            <Button variant="outline" onClick={onImport}>
+              <Upload className="mr-2 h-4 w-4" />
+              Import
             </Button>
             <Button variant="outline" size="icon" onClick={onCreateFolder} aria-label="Create new folder">
               <FolderPlus className="h-4 w-4" />

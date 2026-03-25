@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { GitBranch, Copy, FileCode, Shield, Plus, Trash2 } from "lucide-react";
+import { GitBranch, Copy, Shield, Plus, Trash2, Clock, Users, Settings2, CheckCircle, XCircle, Mail, Loader2 } from "lucide-react";
 import { User, UserRole } from "@/types/auth";
 import { fetchApi, readApiError } from "@/lib/api";
 
@@ -15,7 +15,7 @@ interface SettingsDialogProps {
     user: User | null;
 }
 
-type SettingsTab = "git" | "access" | "general";
+type SettingsTab = "git" | "access" | "pending" | "users" | "system";
 
 interface RoleAssignment {
     email: string;
@@ -23,9 +23,31 @@ interface RoleAssignment {
     source: string;
 }
 
+interface PendingUser {
+    email: string;
+    registered_at: string;
+}
+
+interface RegisteredUser {
+    email: string;
+    is_active: boolean;
+    is_verified: boolean;
+    role: string | null;
+}
+
 export function SettingsDialog({ open, onOpenChange, user }: SettingsDialogProps) {
     const [activeTab, setActiveTab] = useState<SettingsTab>("git");
+    const [pendingCount, setPendingCount] = useState(0);
     const isAdmin = user?.role === "admin";
+
+    useEffect(() => {
+        if (open && isAdmin) {
+            fetchApi("/api/settings/pending-users")
+                .then((r) => (r.ok ? r.json() : []))
+                .then((data: PendingUser[]) => setPendingCount(data.length))
+                .catch(() => {});
+        }
+    }, [open, isAdmin]);
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -58,24 +80,51 @@ export function SettingsDialog({ open, onOpenChange, user }: SettingsDialogProps
                         Access Control
                     </Button>
 
-                    <Button
-                        variant={activeTab === "general" ? "secondary" : "ghost"}
-                        className="justify-start opacity-50 cursor-not-allowed"
-                        title="Coming soon"
-                    >
-                        <FileCode className="mr-2 h-4 w-4" />
-                        General
-                    </Button>
+                    {isAdmin && (
+                        <Button
+                            variant={activeTab === "pending" ? "secondary" : "ghost"}
+                            className="justify-start relative"
+                            onClick={() => setActiveTab("pending")}
+                        >
+                            <Clock className="mr-2 h-4 w-4" />
+                            Pending Approvals
+                            {pendingCount > 0 && (
+                                <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
+                                    {pendingCount > 9 ? "9+" : pendingCount}
+                                </span>
+                            )}
+                        </Button>
+                    )}
+
+                    {isAdmin && (
+                        <Button
+                            variant={activeTab === "users" ? "secondary" : "ghost"}
+                            className="justify-start"
+                            onClick={() => setActiveTab("users")}
+                        >
+                            <Users className="mr-2 h-4 w-4" />
+                            Users
+                        </Button>
+                    )}
+
+                    {isAdmin && (
+                        <Button
+                            variant={activeTab === "system" ? "secondary" : "ghost"}
+                            className="justify-start"
+                            onClick={() => setActiveTab("system")}
+                        >
+                            <Settings2 className="mr-2 h-4 w-4" />
+                            System
+                        </Button>
+                    )}
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6">
                     {activeTab === "git" && <GitSettings user={user} />}
                     {activeTab === "access" && <AccessControlSettings isAdmin={isAdmin} />}
-                    {activeTab === "general" && (
-                        <div className="flex items-center justify-center h-full text-muted-foreground">
-                            General settings coming soon.
-                        </div>
-                    )}
+                    {activeTab === "pending" && <PendingApprovalsSettings onCountChange={setPendingCount} />}
+                    {activeTab === "users" && <UsersSettings />}
+                    {activeTab === "system" && <SystemSettings user={user} />}
                 </div>
             </DialogContent>
         </Dialog>
@@ -367,6 +416,264 @@ function AccessControlSettings({ isAdmin }: { isAdmin: boolean }) {
                         );
                     })
                 )}
+            </div>
+        </div>
+    );
+}
+
+function PendingApprovalsSettings({ onCountChange }: { onCountChange: (n: number) => void }) {
+    const [pending, setPending] = useState<PendingUser[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [actioning, setActioning] = useState<string | null>(null);
+
+    const load = useCallback(async () => {
+        setLoading(true);
+        try {
+            const res = await fetchApi("/api/settings/pending-users");
+            if (res.ok) {
+                const data = (await res.json()) as PendingUser[];
+                setPending(data);
+                onCountChange(data.length);
+            }
+        } finally {
+            setLoading(false);
+        }
+    }, [onCountChange]);
+
+    useEffect(() => { void load(); }, [load]);
+
+    const approve = async (email: string) => {
+        setActioning(email);
+        try {
+            const res = await fetchApi(`/api/settings/pending-users/${encodeURIComponent(email)}/approve`, { method: "POST" });
+            if (res.ok) {
+                toast.success(`Approved ${email}`);
+                await load();
+            } else {
+                toast.error(await readApiError(res, "Failed to approve"));
+            }
+        } finally {
+            setActioning(null);
+        }
+    };
+
+    const deny = async (email: string) => {
+        if (!window.confirm(`Deny registration for ${email}? A denial email will be sent.`)) return;
+        setActioning(email);
+        try {
+            const res = await fetchApi(`/api/settings/pending-users/${encodeURIComponent(email)}/deny`, { method: "POST" });
+            if (res.ok) {
+                toast.success(`Denied ${email}`);
+                await load();
+            } else {
+                toast.error(await readApiError(res, "Failed to deny"));
+            }
+        } finally {
+            setActioning(null);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-lg font-medium">Pending Approvals</h3>
+                <p className="text-sm text-muted-foreground">
+                    Users who have registered but whose email domain is not on the whitelist.
+                </p>
+            </div>
+            <div className="rounded-lg border overflow-hidden">
+                <div className="grid grid-cols-[2fr_1fr_auto] border-b bg-muted/30 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div>Email</div>
+                    <div>Registered</div>
+                    <div />
+                </div>
+                {loading ? (
+                    <div className="p-4 text-sm text-muted-foreground">Loading...</div>
+                ) : pending.length === 0 ? (
+                    <div className="p-4 text-sm text-muted-foreground">No pending approvals.</div>
+                ) : (
+                    pending.map((p) => (
+                        <div key={p.email} className="grid grid-cols-[2fr_1fr_auto] items-center border-b px-4 py-2 gap-2">
+                            <div className="truncate text-sm">{p.email}</div>
+                            <div className="text-xs text-muted-foreground">
+                                {p.registered_at ? new Date(p.registered_at).toLocaleDateString() : "—"}
+                            </div>
+                            <div className="flex gap-1">
+                                <Button
+                                    size="sm"
+                                    className="h-7 text-xs"
+                                    disabled={actioning === p.email}
+                                    onClick={() => void approve(p.email)}
+                                >
+                                    <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                                    Approve
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs text-destructive hover:text-destructive"
+                                    disabled={actioning === p.email}
+                                    onClick={() => void deny(p.email)}
+                                >
+                                    <XCircle className="h-3.5 w-3.5 mr-1" />
+                                    Deny
+                                </Button>
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+}
+
+function UsersSettings() {
+    const [users, setUsers] = useState<RegisteredUser[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [resending, setResending] = useState<string | null>(null);
+
+    const load = useCallback(async () => {
+        setLoading(true);
+        try {
+            const res = await fetchApi("/api/settings/users");
+            if (res.ok) {
+                const data = (await res.json()) as RegisteredUser[];
+                setUsers(data);
+            }
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => { void load(); }, [load]);
+
+    const resendVerification = async (email: string) => {
+        setResending(email);
+        try {
+            const res = await fetchApi(
+                `/api/settings/users/${encodeURIComponent(email)}/resend-verification`,
+                { method: "POST" }
+            );
+            if (res.ok) {
+                toast.success(`Verification email sent to ${email}`);
+            } else {
+                toast.error(await readApiError(res, "Failed to resend verification email"));
+            }
+        } finally {
+            setResending(null);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-lg font-medium">Registered Users</h3>
+                <p className="text-sm text-muted-foreground">All accounts in the system.</p>
+            </div>
+            <div className="rounded-lg border overflow-hidden">
+                <div className="grid grid-cols-[2fr_1fr_1fr_1fr_auto] border-b bg-muted/30 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div>Email</div>
+                    <div>Role</div>
+                    <div>Verified</div>
+                    <div>Active</div>
+                    <div />
+                </div>
+                {loading ? (
+                    <div className="p-4 text-sm text-muted-foreground">Loading users...</div>
+                ) : users.length === 0 ? (
+                    <div className="p-4 text-sm text-muted-foreground">No users found.</div>
+                ) : (
+                    users.map((u) => (
+                        <div key={u.email} className="grid grid-cols-[2fr_1fr_1fr_1fr_auto] items-center border-b px-4 py-2 gap-2">
+                            <div className="truncate text-sm">{u.email}</div>
+                            <div className="text-sm">
+                                {u.role ? (
+                                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{u.role}</span>
+                                ) : (
+                                    <span className="text-xs text-muted-foreground italic">none</span>
+                                )}
+                            </div>
+                            <div>
+                                {u.is_verified
+                                    ? <CheckCircle className="h-4 w-4 text-green-500" />
+                                    : <XCircle className="h-4 w-4 text-muted-foreground" />}
+                            </div>
+                            <div>
+                                {u.is_active
+                                    ? <CheckCircle className="h-4 w-4 text-green-500" />
+                                    : <XCircle className="h-4 w-4 text-destructive" />}
+                            </div>
+                            <div className="flex justify-end">
+                                {!u.is_verified && (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 text-xs"
+                                        disabled={resending === u.email}
+                                        onClick={() => void resendVerification(u.email)}
+                                        title="Resend verification email"
+                                    >
+                                        {resending === u.email
+                                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                            : <Mail className="h-3.5 w-3.5" />}
+                                        <span className="ml-1">Resend</span>
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+}
+
+function SystemSettings({ user }: { user: User | null }) {
+    const [isTesting, setIsTesting] = useState(false);
+    const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+    const testSmtp = async () => {
+        setIsTesting(true);
+        setTestResult(null);
+        try {
+            const res = await fetchApi("/api/settings/smtp/test", { method: "POST" });
+            const data = await res.json();
+            if (!res.ok) {
+                setTestResult({ success: false, message: data.detail || "Failed to send test email" });
+            } else {
+                setTestResult({ success: true, message: data.message || `Test email sent to ${user?.email}` });
+            }
+        } catch {
+            setTestResult({ success: false, message: "Network error — could not reach the server" });
+        } finally {
+            setIsTesting(false);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h3 className="text-lg font-medium">System</h3>
+                <p className="text-sm text-muted-foreground">Server diagnostics and configuration tools.</p>
+            </div>
+            <div className="space-y-4 border rounded-lg p-4 bg-card">
+                <div className="space-y-0.5">
+                    <Label className="text-base">SMTP Email Test</Label>
+                    <p className="text-sm text-muted-foreground">
+                        Send a test email to <strong>{user?.email}</strong> to verify outgoing mail is working.
+                    </p>
+                </div>
+                <div className="flex items-center gap-3">
+                    <Button variant="outline" onClick={testSmtp} disabled={isTesting}>
+                        {isTesting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+                        Send Test Email
+                    </Button>
+                    {testResult && (
+                        <span className={`text-sm ${testResult.success ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
+                            {testResult.message}
+                        </span>
+                    )}
+                </div>
             </div>
         </div>
     );
