@@ -26,6 +26,7 @@ from fastapi_users.db import SQLAlchemyUserDatabase
 from httpx_oauth.clients.github import GitHubOAuth2
 
 from app.core.config import settings
+from app.core.encryption import decrypt_token, encrypt_token
 from app.core.session import create_session_token, set_session_cookie
 from app.db.db import get_user_db
 from app.db.models import User
@@ -282,6 +283,11 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             is_verified_by_default=is_verified_by_default,
         )
 
+        if oauth_name == "github":
+            encrypted = encrypt_token(access_token)
+            if encrypted is not None:
+                user = await self.user_db.update(user, {"github_access_token_encrypted": encrypted})
+
         if _is_domain_whitelisted(account_email):
             _auto_approve_in_rbac(account_email)
 
@@ -331,3 +337,24 @@ github_oauth_client = GitHubOAuth2(
 # ---------------------------------------------------------------------------
 
 fastapi_users_instance = FastAPIUsers[User, uuid.UUID](get_user_manager, [auth_backend])
+
+
+# ---------------------------------------------------------------------------
+# Dependency: current user + decrypted GitHub token
+# ---------------------------------------------------------------------------
+
+async def get_current_user_with_github_token(
+    user: User = Depends(fastapi_users_instance.current_user()),
+) -> tuple[User, Optional[str]]:
+    """FastAPI dependency that returns the authenticated user together with their
+    decrypted GitHub access token.
+
+    The token is ``None`` when:
+    - The user has not authenticated via GitHub OAuth, or
+    - ``TOKEN_ENCRYPTION_KEY`` is not configured, or
+    - Decryption fails (wrong key / corrupted value).
+    """
+    token: Optional[str] = None
+    if user.github_access_token_encrypted:
+        token = decrypt_token(user.github_access_token_encrypted)
+    return user, token

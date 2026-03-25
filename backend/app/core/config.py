@@ -164,6 +164,17 @@ class Settings(BaseSettings):
         description="GitHub Personal Access Token for private repository access."
     )
 
+    # ===========================================
+    # Token Encryption
+    # ===========================================
+    TOKEN_ENCRYPTION_KEY: str = Field(
+        default="",
+        description=(
+            "Fernet key used to encrypt GitHub access tokens at rest. "
+            "Generate with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+        ),
+    )
+
     COMMENTS_API_BASE_URL: str = Field(
         default="",
         description=(

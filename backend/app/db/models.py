@@ -1,5 +1,7 @@
+from typing import Optional
+
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
-from sqlalchemy import Enum as SAEnum
+from sqlalchemy import Enum as SAEnum, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -18,6 +20,10 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         SAEnum("viewer", "designer", "admin", name="user_role"),
         nullable=False,
         default="viewer",
+    )
+
+    github_access_token_encrypted: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, default=None
     )
 
     oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(
