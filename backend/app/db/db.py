@@ -6,7 +6,7 @@ from fastapi import Depends
 from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.db.models import User
+from app.db.models import OAuthAccount, User
 
 # Resolve the data/ directory next to the existing data/ folder (repo root)
 _data_dir = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data")))
@@ -24,4 +24,4 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def get_user_db(session: AsyncSession = Depends(get_async_session)):
-    yield SQLAlchemyUserDatabase(session, User)
+    yield SQLAlchemyUserDatabase(session, User, OAuthAccount)

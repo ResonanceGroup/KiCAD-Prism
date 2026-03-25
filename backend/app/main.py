@@ -1,9 +1,20 @@
-import uuid
+import subprocess
+import os
+from pathlib import Path
+from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+import logging
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
-from fastapi_users.authentication import AuthenticationBackend, CookieTransport, JWTStrategy
+
+from app.auth import (
+    UserCreate,
+    UserRead,
+    auth_backend,
+    fastapi_users_instance,
+    github_oauth_client,
+)
 from app.api.auth import router as auth_router
 from app.api.projects import router as projects_router
 from app.api.comments import router as comments_router
@@ -11,16 +22,10 @@ from app.api.diff import router as diff_router
 from app.api.folders import router as folders_router
 from app.api.settings import router as settings_router
 from app.api.workspace import router as workspace_router
-from app.db.db import engine, get_user_db
-from app.db.models import Base, User
+from app.db.db import engine
+from app.db.models import Base
 from app.services.comments_store_service import initialize_comments_store
 from app.core.config import settings
-import subprocess
-import os
-from pathlib import Path
-from contextlib import asynccontextmanager
-
-import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -112,43 +117,6 @@ async def lifespan(app: FastAPI):
     yield
 
 
-# ---------------------------------------------------------------------------
-# FastAPIUsers – cookie transport backed by SESSION_SECRET (HttpOnly JWT)
-# ---------------------------------------------------------------------------
-
-class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
-    reset_password_token_secret = settings.SESSION_SECRET
-    verification_token_secret = settings.SESSION_SECRET
-
-
-async def get_user_manager(user_db=Depends(get_user_db)):
-    yield UserManager(user_db)
-
-
-cookie_transport = CookieTransport(
-    cookie_httponly=True,
-    cookie_secure=settings.SESSION_COOKIE_SECURE,
-)
-
-
-def get_jwt_strategy() -> JWTStrategy:
-    return JWTStrategy(
-        secret=settings.SESSION_SECRET,
-        lifetime_seconds=settings.SESSION_TTL_HOURS * 3600,
-    )
-
-
-auth_backend = AuthenticationBackend(
-    name="cookie",
-    transport=cookie_transport,
-    get_strategy=get_jwt_strategy,
-)
-
-fastapi_users = FastAPIUsers[User, uuid.UUID](
-    get_user_manager,
-    [auth_backend],
-)
-
 app = FastAPI(title="KiCAD Prism API", lifespan=lifespan)
 
 # Configure CORS
@@ -168,3 +136,37 @@ app.include_router(diff_router, prefix="/api/projects", tags=["diff"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(folders_router, prefix="/api/folders", tags=["folders"])
 app.include_router(workspace_router, prefix="/api/workspace", tags=["workspace"])
+
+# ---------------------------------------------------------------------------
+# fastapi-users: email/password routers
+# ---------------------------------------------------------------------------
+app.include_router(
+    fastapi_users_instance.get_auth_router(auth_backend),
+    prefix="/api/auth/email",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users_instance.get_register_router(UserRead, UserCreate),
+    prefix="/api/auth/email",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users_instance.get_reset_password_router(),
+    prefix="/api/auth/email",
+    tags=["auth"],
+)
+
+# ---------------------------------------------------------------------------
+# fastapi-users: GitHub OAuth router
+# ---------------------------------------------------------------------------
+app.include_router(
+    fastapi_users_instance.get_oauth_router(
+        github_oauth_client,
+        auth_backend,
+        settings.SESSION_SECRET,
+        associate_by_email=True,
+        is_verified_by_default=True,
+    ),
+    prefix="/api/auth/github",
+    tags=["auth"],
+)

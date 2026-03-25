@@ -212,17 +212,19 @@ class Settings(BaseSettings):
     @property
     def AUTH_ENABLED(self) -> bool:
         """
-        Authentication is enabled only if:
+        Authentication is enabled when:
         1. AUTH_ENABLED env var is True (default), AND
-        2. A valid Google Client ID is configured, AND
-        3. DEV_MODE is False (unless GOOGLE_CLIENT_ID is set)
+        2. DEV_MODE is False, AND
+        3. At least one auth provider is configured:
+           - GOOGLE_CLIENT_ID  (Google OAuth)
+           - GITHUB_CLIENT_ID  (GitHub OAuth)
+           - SESSION_SECRET    (email/password via fastapi-users)
         """
-        # If explicitly disabled via env var, it's off.
         if not self.AUTH_ENABLED_OVERRIDE:
             return False
-            
-        # Otherwise, need a client ID and either not in dev mode OR client ID is present and we're in Docker
-        return bool(self.GOOGLE_CLIENT_ID) and not self.DEV_MODE
+        if self.DEV_MODE:
+            return False
+        return bool(self.GOOGLE_CLIENT_ID) or bool(self.GITHUB_CLIENT_ID) or bool(self.SESSION_SECRET)
     
     class Config:
         env_file = ".env"
