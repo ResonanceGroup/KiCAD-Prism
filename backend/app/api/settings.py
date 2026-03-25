@@ -282,6 +282,27 @@ async def list_all_users(session: AsyncSession = Depends(get_async_session)):
     ]
 
 
+@router.delete("/users/{email}")
+async def delete_user(
+    email: str,
+    caller: AuthenticatedUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Permanently delete a user account and revoke any role assignment."""
+    normalized = email.strip().lower()
+    if normalized == caller.email.strip().lower():
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+    result = await session.execute(select(User).where(User.email == normalized))
+    user = result.unique().scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Remove role assignment if present
+    access_service.delete_user_role(normalized, caller.email)
+    await session.delete(user)
+    await session.commit()
+    return {"deleted": normalized}
+
+
 @router.post("/users/{email}/resend-verification")
 async def resend_verification_email(
     email: str,

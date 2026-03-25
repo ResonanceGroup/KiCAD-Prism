@@ -11,6 +11,7 @@ export interface WorkspaceActionResult {
 interface WorkspaceDataState {
   projects: Project[];
   folders: FolderTreeItem[];
+  accessMap: Record<string, boolean>;
   loading: boolean;
   error: string | null;
   folderById: Map<string, FolderTreeItem>;
@@ -25,11 +26,13 @@ interface WorkspaceDataState {
 interface WorkspaceBootstrapResponse {
   projects: Project[];
   folders: FolderTreeItem[];
+  access_map: Record<string, boolean>;
 }
 
 export function useWorkspaceData(): WorkspaceDataState {
   const [projects, setProjects] = useState<Project[]>([]);
   const [folders, setFolders] = useState<FolderTreeItem[]>([]);
+  const [accessMap, setAccessMap] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,10 +48,12 @@ export function useWorkspaceData(): WorkspaceDataState {
       );
       setProjects(data.projects);
       setFolders(data.folders);
+      setAccessMap(data.access_map ?? {});
       setError(null);
     } catch (error) {
       setProjects([]);
       setFolders([]);
+      setAccessMap({});
       setError(error instanceof Error ? error.message : "Failed to load workspace");
     } finally {
       setLoading(false);
@@ -57,6 +62,8 @@ export function useWorkspaceData(): WorkspaceDataState {
 
   useEffect(() => {
     void refresh();
+    const interval = setInterval(() => void refresh(), 30_000);
+    return () => clearInterval(interval);
   }, [refresh]);
 
   const folderById = useMemo(() => {
@@ -174,5 +181,6 @@ export function useWorkspaceData(): WorkspaceDataState {
     deleteFolder,
     moveProject,
     deleteProject,
+    accessMap,
   };
 }

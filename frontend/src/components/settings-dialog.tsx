@@ -531,6 +531,8 @@ function UsersSettings() {
     const [users, setUsers] = useState<RegisteredUser[]>([]);
     const [loading, setLoading] = useState(false);
     const [resending, setResending] = useState<string | null>(null);
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+    const [deleting, setDeleting] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -546,6 +548,23 @@ function UsersSettings() {
     }, []);
 
     useEffect(() => { void load(); }, [load]);
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        setDeleting(true);
+        try {
+            const res = await fetchApi(`/api/settings/users/${encodeURIComponent(deleteTarget)}`, { method: "DELETE" });
+            if (res.ok) {
+                toast.success(`Deleted ${deleteTarget}`);
+                setDeleteTarget(null);
+                void load();
+            } else {
+                toast.error(await readApiError(res, "Failed to delete user"));
+            }
+        } finally {
+            setDeleting(false);
+        }
+    };
 
     const resendVerification = async (email: string) => {
         setResending(email);
@@ -566,6 +585,23 @@ function UsersSettings() {
 
     return (
         <div className="space-y-6">
+            {deleteTarget && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                    <div className="bg-background rounded-lg shadow-xl p-6 w-96 space-y-4">
+                        <h3 className="font-semibold text-lg">Delete User</h3>
+                        <p className="text-sm text-muted-foreground">
+                            Permanently delete <strong className="text-foreground">{deleteTarget}</strong>? This cannot be undone.
+                        </p>
+                        <div className="flex justify-end gap-2">
+                            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+                            <Button variant="destructive" onClick={() => void confirmDelete()} disabled={deleting}>
+                                {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1.5" />}
+                                Delete
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <div>
                 <h3 className="text-lg font-medium">Registered Users</h3>
                 <p className="text-sm text-muted-foreground">All accounts in the system.</p>
@@ -603,7 +639,7 @@ function UsersSettings() {
                                     ? <CheckCircle className="h-4 w-4 text-green-500" />
                                     : <XCircle className="h-4 w-4 text-destructive" />}
                             </div>
-                            <div className="flex justify-end">
+                            <div className="flex items-center justify-end gap-1.5">
                                 {!u.is_verified && (
                                     <Button
                                         variant="outline"
@@ -619,6 +655,15 @@ function UsersSettings() {
                                         <span className="ml-1">Resend</span>
                                     </Button>
                                 )}
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                    onClick={() => setDeleteTarget(u.email)}
+                                    title="Delete user"
+                                >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
                             </div>
                         </div>
                     ))

@@ -1,7 +1,7 @@
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { Suspense, lazy, useEffect, useState, type ComponentType } from "react";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, FileText, History, Box, FolderOpen, ChevronLeft, ChevronRight, GitBranch, RotateCcw, PlayCircle, RefreshCw, Menu, Settings } from "lucide-react";
+import { ArrowLeft, FileText, History, Box, FolderOpen, ChevronLeft, ChevronRight, GitBranch, RotateCcw, PlayCircle, RefreshCw, Menu, Settings, Settings2 } from "lucide-react";
 import { fetchApi, fetchJson, readApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { User } from "@/types/auth";
@@ -25,6 +25,9 @@ const Visualizer = lazy(() =>
 );
 const MarkdownContent = lazy(() =>
     import("@/components/markdown-content").then((module) => ({ default: module.MarkdownContent }))
+);
+const ProjectSettingsTab = lazy(() =>
+    import("@/components/project-settings-tab").then((module) => ({ default: module.ProjectSettingsTab }))
 );
 
 interface Project {
@@ -55,7 +58,7 @@ interface WorkflowJobStatus {
     logs?: string[];
 }
 
-type Section = "overview" | "history" | "visualizers" | "assets" | "documentation" | "workflows";
+type Section = "overview" | "history" | "visualizers" | "assets" | "documentation" | "workflows" | "settings";
 
 
 
@@ -219,6 +222,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
         { id: "workflows" as Section, label: "Workflows", icon: PlayCircle },
         { id: "assets" as Section, label: "Assets Portal", icon: FolderOpen },
         { id: "documentation" as Section, label: "Documentation", icon: FileText },
+        { id: "settings" as Section, label: "Settings", icon: Settings2 },
     ];
 
     const handleBackNavigation = () => {
@@ -495,6 +499,12 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                         <div>
                             <WorkflowsPanel projectId={projectId!} user={user} canRun={canMutateProject} />
                         </div>
+                    )}
+
+                    {activeSection === "settings" && projectId && (
+                        <Suspense fallback={<div className="text-sm text-muted-foreground">Loading settings...</div>}>
+                            <ProjectSettingsTab projectId={projectId} user={user} />
+                        </Suspense>
                     )}
 
 

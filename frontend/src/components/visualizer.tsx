@@ -874,10 +874,10 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
 
     // Tab Config
     const tabs: { id: VisualizerTab; label: string; icon: any }[] = [
-        { id: "sch", label: "Schematic", icon: Cpu },
-        { id: "pcb", label: "PCB Layout", icon: CircuitBoard },
-        { id: "3d", label: "3D View", icon: Box },
-        { id: "ibom", label: "iBoM", icon: FileText },
+        { id: "sch",  label: "Schematic",  icon: Cpu },
+        { id: "pcb",  label: "PCB Layout", icon: CircuitBoard },
+        { id: "3d",   label: "3D View",    icon: Box },
+        { id: "ibom", label: "iBoM",       icon: FileText },
     ];
 
     if (loading) return <div className="flex justify-center items-center h-full">Loading Visualizer...</div>;
@@ -1004,6 +1004,34 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                     </>
                 )}
             </div>
+
+            {/* Schematic Pages Bar — visible when on sch tab with multiple pages */}
+            {activeTab === "sch" && schematicSources.length > 1 && (
+                <div className="flex items-center gap-1 border-b px-2 py-1 bg-muted/10 overflow-x-auto shrink-0">
+                    <span className="text-xs text-muted-foreground mr-1 shrink-0">Pages:</span>
+                    {schematicSources.map(({ filename }) => {
+                        const label =
+                            filename === "root.kicad_sch"
+                                ? "Root"
+                                : (filename.split("/").pop()?.replace(/\.kicad_sch$/, "") ?? filename);
+                        const isActive = activePage === filename;
+                        return (
+                            <Button
+                                key={filename}
+                                variant={isActive ? "secondary" : "ghost"}
+                                size="sm"
+                                className="text-xs h-7 shrink-0"
+                                onClick={() => {
+                                    setActivePage(filename);
+                                    schematicViewerRef.current?.switchPage(filename);
+                                }}
+                            >
+                                {label}
+                            </Button>
+                        );
+                    })}
+                </div>
+            )}
 
             {/* Push Message Feedback */}
             {pushMessage && (

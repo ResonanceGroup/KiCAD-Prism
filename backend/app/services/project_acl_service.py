@@ -24,7 +24,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.models import ProjectAccessRequest, ProjectMembership
+from app.db.models import ProjectAccessRequest, ProjectInvite, ProjectMembership
 
 logger = logging.getLogger(__name__)
 
@@ -219,9 +219,13 @@ async def resolve_effective_project_role(
         return "admin"
 
     if visibility == "hidden":
-        # Hidden projects: only bootstrap admin (handled above)
+        # Hidden projects: only bootstrap admin (handled above) or explicit membership
         membership = await get_membership(session, project_id, email)
-        return membership.project_role if membership else None
+        if membership:
+            return membership.project_role
+        # System admins can also see hidden projects if they have membership,
+        # but without membership they cannot access hidden projects
+        return None
 
     if system_role == "admin":
         return "admin"
@@ -230,7 +234,10 @@ async def resolve_effective_project_role(
     if membership:
         return membership.project_role
 
-    if visibility == "public":
+    # Viewers must have an explicit membership for all projects —
+    # they are NOT automatically granted access even to public ones.
+    # Only designers/admins get implicit viewer access to public projects.
+    if visibility == "public" and system_role in ("designer", "admin"):
         return "viewer"
 
     return None
@@ -248,3 +255,136 @@ async def can_manage_project(
         session, project_id, user_email, visibility, system_role
     )
     return role in ("manager", "admin")
+
+
+# ---------------------------------------------------------------------------
+# Project Invites
+# ---------------------------------------------------------------------------
+
+async def create_project_invite(
+    session: AsyncSession,
+    project_id: str,
+    invited_email: str,
+    invited_role: str,
+    invited_by: str,
+    expires_days: int = 7,
+) -> ProjectInvite:
+    """Create a new invite, revoking any existing pending invite for the same user+project."""
+    email = invited_email.strip().lower()
+    # Revoke any existing pending invite so only one is active at a time
+    result = await session.execute(
+        select(ProjectInvite).where(
+            ProjectInvite.project_id == project_id,
+            ProjectInvite.invited_email == email,
+            ProjectInvite.status == "pending",
+        )
+    )
+    old = result.scalar_one_or_none()
+    if old:
+        old.status = "revoked"
+        await session.commit()
+
+    invite = ProjectInvite(
+        project_id=project_id,
+        invited_email=email,
+        invited_role=invited_role,
+        invited_by=invited_by.strip().lower(),
+        expires_at=datetime.datetime.utcnow() + datetime.timedelta(days=expires_days),
+    )
+    session.add(invite)
+    await session.commit()
+    await session.refresh(invite)
+    return invite
+
+
+async def get_invite_by_token(
+    session: AsyncSession, token: str
+) -> Optional[ProjectInvite]:
+    result = await session.execute(
+        select(ProjectInvite).where(ProjectInvite.token == token)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_pending_invites_for_user(
+    session: AsyncSession, user_email: str
+) -> List[ProjectInvite]:
+    email = user_email.strip().lower()
+    now = datetime.datetime.utcnow()
+    result = await session.execute(
+        select(ProjectInvite)
+        .where(
+            ProjectInvite.invited_email == email,
+            ProjectInvite.status == "pending",
+        )
+        .order_by(ProjectInvite.created_at.desc())
+    )
+    invites = list(result.scalars().all())
+    return [i for i in invites if i.expires_at is None or i.expires_at > now]
+
+
+async def accept_project_invite(
+    session: AsyncSession, token: str, accepting_email: str
+) -> tuple:
+    """Accept an invite by token.  Returns (membership, error_str)."""
+    invite = await get_invite_by_token(session, token)
+    if invite is None:
+        return None, "Invite not found"
+    if invite.status != "pending":
+        return None, f"Invite is already {invite.status}"
+    now = datetime.datetime.utcnow()
+    if invite.expires_at and invite.expires_at < now:
+        return None, "Invite has expired"
+    membership = await upsert_membership(
+        session,
+        project_id=invite.project_id,
+        user_email=accepting_email,
+        project_role=invite.invited_role,
+        added_by=invite.invited_by,
+    )
+    invite.status = "accepted"
+    await session.commit()
+    return membership, None
+
+
+async def accept_project_invite_by_id(
+    session: AsyncSession, invite_id: str, accepting_email: str
+) -> tuple:
+    """Accept an invite by invite ID.  Returns (membership, error_str)."""
+    result = await session.execute(
+        select(ProjectInvite).where(ProjectInvite.id == invite_id)
+    )
+    invite = result.scalar_one_or_none()
+    if invite is None or invite.invited_email != accepting_email.strip().lower():
+        return None, "Invite not found"
+    if invite.status != "pending":
+        return None, f"Invite is already {invite.status}"
+    now = datetime.datetime.utcnow()
+    if invite.expires_at and invite.expires_at < now:
+        return None, "Invite has expired"
+    membership = await upsert_membership(
+        session,
+        project_id=invite.project_id,
+        user_email=accepting_email,
+        project_role=invite.invited_role,
+        added_by=invite.invited_by,
+    )
+    invite.status = "accepted"
+    await session.commit()
+    return membership, None
+
+
+async def decline_project_invite(
+    session: AsyncSession, invite_id: str, user_email: str
+) -> bool:
+    result = await session.execute(
+        select(ProjectInvite).where(ProjectInvite.id == invite_id)
+    )
+    invite = result.scalar_one_or_none()
+    if invite is None or invite.invited_email != user_email.strip().lower():
+        return False
+    if invite.status != "pending":
+        return False
+    invite.status = "declined"
+    await session.commit()
+    return True

@@ -211,6 +211,22 @@ class Settings(BaseSettings):
         default="",
         description="Public frontend URL for email deep-links (e.g. https://prism.yourcompany.com)."
     )
+
+    # ===========================================
+    # Network / Server Binding
+    # ===========================================
+    # Host the backend uvicorn server binds to.
+    # Use 0.0.0.0 to accept connections from any network interface (LAN/remote access).
+    # Use 127.0.0.1 to restrict to localhost only.
+    BACKEND_HOST: str = Field(
+        default="127.0.0.1",
+        description="Host address the uvicorn server binds to (0.0.0.0 = all interfaces)."
+    )
+
+    BACKEND_PORT: int = Field(
+        default=8000,
+        description="Port the uvicorn server listens on."
+    )
     
     # ===========================================
     # Computed Properties

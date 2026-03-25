@@ -155,6 +155,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="KiCAD Prism API", lifespan=lifespan)
 
 # Configure CORS
+# ---------------------------------------------------------------------------
+# Entry point when run directly: python -m app.main
+# Reads BACKEND_HOST / BACKEND_PORT from .env so the bind address is
+# controlled by configuration rather than a hardcoded command-line flag.
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "app.main:app",
+        host=settings.BACKEND_HOST,
+        port=settings.BACKEND_PORT,
+        reload=True,
+    )
+
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # For development, allow all
@@ -164,9 +179,12 @@ app.add_middleware(
 )
 
 # Include Routers
+# NOTE: project_acl_router must come BEFORE projects_router so that its literal
+# routes (e.g. GET /discover, POST /create) are matched before the parameterised
+# GET /{project_id} wildcard in projects_router swallows them.
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
-app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
 app.include_router(project_acl_router, prefix="/api/projects", tags=["project-acl"])
+app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
 app.include_router(comments_router, prefix="/api/projects", tags=["comments"])
 app.include_router(diff_router, prefix="/api/projects", tags=["diff"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])

@@ -24,6 +24,7 @@ interface WorkspaceGalleryViewProps {
   onMoveProject: (project: Project) => void;
   onDeleteProject: (project: Project) => void;
   canManageProjects: boolean;
+  accessMap?: Record<string, boolean>;
 }
 
 export function WorkspaceGalleryView({
@@ -43,6 +44,7 @@ export function WorkspaceGalleryView({
   onMoveProject,
   onDeleteProject,
   canManageProjects,
+  accessMap,
 }: WorkspaceGalleryViewProps) {
   return (
     <div className="space-y-6">
@@ -61,6 +63,7 @@ export function WorkspaceGalleryView({
                   project={project}
                   selected={selectedProjectId === project.id}
                   searchQuery={searchQuery}
+                  hasAccess={accessMap ? (accessMap[project.id] ?? true) : true}
                   onClick={() => onSelectProject(project)}
                   onDoubleClick={() => onOpenProject(project)}
                   actions={
@@ -136,6 +139,7 @@ export function WorkspaceGalleryView({
                     key={project.id}
                     project={project}
                     selected={selectedProjectId === project.id}
+                    hasAccess={accessMap ? (accessMap[project.id] ?? true) : true}
                     onClick={() => onSelectProject(project)}
                     onDoubleClick={() => onOpenProject(project)}
                     actions={

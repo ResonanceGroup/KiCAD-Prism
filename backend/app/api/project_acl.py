@@ -84,6 +84,15 @@ class VisibilityUpdate(BaseModel):
     visibility: str
 
 
+class InviteRequest(BaseModel):
+    invited_email: str
+    invited_role: str = "viewer"
+
+
+class AcceptInviteBody(BaseModel):
+    token: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -302,16 +311,21 @@ async def discover_projects(
     is_bootstrap = project_acl_service._is_bootstrap_admin(user.email)
     result = []
     for p in all_projects:
+        # For hidden projects: only show to bootstrap admin or explicit members
         if p.visibility == VISIBILITY_HIDDEN and not is_bootstrap:
-            continue
+            explicit_membership = await project_acl_service.get_membership(session, p.id, user.email.lower())
+            if not explicit_membership:
+                continue
+
+        membership = await project_acl_service.get_membership(session, p.id, user.email)
         has_access = await project_acl_service.resolve_effective_project_role(
             session, p.id, user.email, p.visibility, user.role
         )
-        membership = await project_acl_service.get_membership(session, p.id, user.email)
         pending = await project_acl_service.get_pending_request(session, p.id, user.email)
         result.append({
             "id": p.id,
-            "name": p.display_name or p.name,
+            "name": p.name,
+            "display_name": p.display_name,
             "description": p.description,
             "visibility": p.visibility,
             "thumbnail_url": p.thumbnail_url,
@@ -321,6 +335,129 @@ async def discover_projects(
             "pending_request": pending.requested_role if pending else None,
         })
     return result
+
+
+@router.get("/access-requests/pending")
+async def list_my_pending_access_requests(
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Return all pending access requests for projects the current user can manage."""
+    all_projects = project_service.get_registered_projects()
+    result = []
+    for p in all_projects:
+        can_manage = await project_acl_service.can_manage_project(
+            session, p.id, user.email, p.visibility, user.role
+        )
+        if not can_manage:
+            continue
+        requests = await project_acl_service.list_access_requests(session, p.id)
+        for r in requests:
+            result.append({
+                "id": r.id,
+                "project_id": p.id,
+                "project_name": p.display_name or p.name,
+                "user_email": r.user_email,
+                "requested_role": r.requested_role,
+                "requested_at": r.requested_at.isoformat() if r.requested_at else "",
+            })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Invite endpoints (literal paths — must stay ABOVE /{project_id}/... routes)
+# ---------------------------------------------------------------------------
+
+@router.get("/invites/pending")
+async def list_pending_invites(
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Return all pending project invites for the current user (in-app notifications)."""
+    invites = await project_acl_service.list_pending_invites_for_user(session, user.email)
+    result = []
+    for inv in invites:
+        project = project_service.get_project_by_id(inv.project_id)
+        project_name = (project.display_name or project.name) if project else inv.project_id
+        result.append({
+            "id": inv.id,
+            "project_id": inv.project_id,
+            "project_name": project_name,
+            "invited_email": inv.invited_email,
+            "invited_role": inv.invited_role,
+            "invited_by": inv.invited_by,
+            "status": inv.status,
+            "created_at": inv.created_at.isoformat() if inv.created_at else "",
+            "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+        })
+    return result
+
+
+@router.get("/invite/info")
+async def get_invite_info(
+    token: str,
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Return invite metadata for a token — used by the accept-invite frontend page."""
+    invite = await project_acl_service.get_invite_by_token(session, token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    project = project_service.get_project_by_id(invite.project_id)
+    project_name = (project.display_name or project.name) if project else invite.project_id
+    return {
+        "id": invite.id,
+        "project_id": invite.project_id,
+        "project_name": project_name,
+        "invited_email": invite.invited_email,
+        "invited_role": invite.invited_role,
+        "invited_by": invite.invited_by,
+        "status": invite.status,
+        "created_at": invite.created_at.isoformat() if invite.created_at else "",
+        "expires_at": invite.expires_at.isoformat() if invite.expires_at else None,
+    }
+
+
+@router.post("/invite/accept")
+async def accept_project_invite(
+    body: AcceptInviteBody,
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Accept a project invite by token. The authenticated user claims the invite."""
+    membership, error = await project_acl_service.accept_project_invite(
+        session, body.token, user.email
+    )
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return _membership_to_response(membership)
+
+
+@router.post("/invites/{invite_id}/accept")
+async def accept_project_invite_by_id(
+    invite_id: str,
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Accept a pending project invite by its ID (in-app flow)."""
+    membership, error = await project_acl_service.accept_project_invite_by_id(
+        session, invite_id, user.email
+    )
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return _membership_to_response(membership)
+
+
+@router.post("/invites/{invite_id}/decline")
+async def decline_project_invite(
+    invite_id: str,
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Decline a pending project invite."""
+    ok = await project_acl_service.decline_project_invite(session, invite_id, user.email)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Invite not found or already handled")
+    return {"declined": invite_id}
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +515,70 @@ async def remove_project_member(
     if not removed:
         raise HTTPException(status_code=404, detail="Member not found")
     return {"removed": email}
+
+
+@router.post("/{project_id}/invite")
+async def invite_member_to_project(
+    project_id: str,
+    body: InviteRequest,
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Send a direct invite to a user by email. Requires project manager or admin."""
+    project = _get_project_or_404(project_id)
+    await _assert_project_manager(session, project, user)
+
+    if body.invited_role not in ("viewer", "manager", "admin"):
+        raise HTTPException(status_code=400, detail="invited_role must be viewer/manager/admin")
+
+    # Don't invite someone who is already a member
+    existing = await project_acl_service.get_membership(session, project_id, body.invited_email)
+    if existing:
+        raise HTTPException(status_code=400, detail="User is already a member of this project")
+
+    invite = await project_acl_service.create_project_invite(
+        session,
+        project_id=project_id,
+        invited_email=body.invited_email,
+        invited_role=body.invited_role,
+        invited_by=user.email,
+    )
+
+    # Send email notification (non-fatal if SMTP not configured)
+    try:
+        from app.auth import _send_smtp_email
+        from app.core.config import settings as _settings
+        project_name = project.display_name or project.name
+        accept_url = f"{_settings.APP_URL}/invite/accept?token={invite.token}"
+        await _send_smtp_email(
+            to=invite.invited_email,
+            subject=f"You've been invited to {project_name} on KiCAD Prism",
+            body_html=(
+                f"<p>Hello,</p>"
+                f"<p>You have been invited to join <strong>{project_name}</strong> "
+                f"on KiCAD Prism as a <strong>{invite.invited_role}</strong>.</p>"
+                f"<p>Invited by: <strong>{user.email}</strong></p>"
+                f"<p style='margin-top:20px;'>"
+                f"  <a href='{accept_url}' style='display:inline-block;padding:10px 24px;"
+                f"background:#2563eb;color:white;text-decoration:none;border-radius:6px;"
+                f"font-weight:600;'>Accept Invitation</a>"
+                f"</p>"
+                f"<p style='color:#6b7280;font-size:0.875rem;'>This invitation expires in 7 days. "
+                f"If you did not expect this, you can safely ignore this email.</p>"
+            ),
+        )
+    except Exception:
+        pass  # email failure is non-fatal
+
+    return {
+        "id": invite.id,
+        "project_id": invite.project_id,
+        "invited_email": invite.invited_email,
+        "invited_role": invite.invited_role,
+        "invited_by": invite.invited_by,
+        "created_at": invite.created_at.isoformat(),
+        "expires_at": invite.expires_at.isoformat() if invite.expires_at else None,
+    }
 
 
 @router.post("/{project_id}/join")

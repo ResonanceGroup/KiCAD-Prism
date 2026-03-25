@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,6 @@ import prismLogoMark from "@/assets/branding/kicad-prism/kicad-prism-icon.svg";
 
 export function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
   const token = searchParams.get("token") ?? "";
 
   const [isLoading, setIsLoading] = useState(true);
@@ -72,7 +71,7 @@ export function VerifyEmailPage() {
                 <div className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-700 dark:text-green-400">
                   Your email has been verified. You can now sign in.
                 </div>
-                <Button className="w-full" onClick={() => navigate("/")}>
+                <Button className="w-full" onClick={() => { window.location.href = "/"; }}>
                   Go to sign in
                 </Button>
               </>
@@ -83,7 +82,7 @@ export function VerifyEmailPage() {
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   {error}
                 </div>
-                <Button variant="outline" className="w-full" onClick={() => navigate("/")}>
+                <Button variant="outline" className="w-full" onClick={() => { window.location.href = "/"; }}>
                   Go to sign in
                 </Button>
               </>

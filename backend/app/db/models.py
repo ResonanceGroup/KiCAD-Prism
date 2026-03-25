@@ -85,3 +85,35 @@ class ProjectAccessRequest(Base):
     )
     reviewed_by: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
     reviewed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class ProjectInvite(Base):
+    """Direct invitations sent by project managers to a specific email to join a project."""
+
+    __tablename__ = "project_invite"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(_uuid_mod.uuid4())
+    )
+    # Secure token embedded in the accept-link email
+    token: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True,
+        default=lambda: _uuid_mod.uuid4().hex + _uuid_mod.uuid4().hex[:28],
+    )
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    invited_email: Mapped[str] = mapped_column(String(254), nullable=False, index=True)
+    invited_role: Mapped[str] = mapped_column(
+        SAEnum("viewer", "manager", "admin", name="invite_role"),
+        nullable=False,
+        default="viewer",
+    )
+    invited_by: Mapped[str] = mapped_column(String(254), nullable=False)
+    status: Mapped[str] = mapped_column(
+        SAEnum("pending", "accepted", "declined", "revoked", name="invite_status"),
+        nullable=False,
+        default="pending",
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.datetime.utcnow
+    )
+    expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)

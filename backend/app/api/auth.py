@@ -244,3 +244,12 @@ async def search_users(
         if q_lower in a["email"].lower()
     ]
     return results[:10]
+
+
+@router.get("/users")
+async def list_users(
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Return all workspace users with their UAC role. Requires authentication."""
+    assignments = access_service.list_role_assignments()
+    return [{"email": a["email"], "role": a["role"]} for a in assignments]

@@ -31,6 +31,9 @@ services:
       - AUTH_ENABLED=${AUTH_ENABLED:-true}
       # Development mode (set to false for production/bundling)
       - DEV_MODE=false
+      # Backend host/port (container always binds on all interfaces)
+      - BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
+      - BACKEND_PORT=${BACKEND_PORT:-8000}
       # GitHub Token for private repository access (optional)
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       # GitHub OAuth for org-scoped login

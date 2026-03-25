@@ -53,7 +53,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const { projects, folders, loading, error, folderById, refresh, createFolder, renameFolder, deleteFolder, moveProject, deleteProject } =
+  const { projects, folders, loading, error, folderById, refresh, createFolder, renameFolder, deleteFolder, moveProject, deleteProject, accessMap } =
     useWorkspaceData();
 
   const [section, setSection] = useState<WorkspaceSection>("projects");
@@ -353,6 +353,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
                         onMoveProject={setProjectToMove}
                         onDeleteProject={setProjectToDelete}
                         canManageProjects={canManageProjects}
+                        accessMap={accessMap}
                       />
                     ) : (
                       <WorkspaceListView
@@ -371,6 +372,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
                         onMoveProject={setProjectToMove}
                         onDeleteProject={setProjectToDelete}
                         canManageProjects={canManageProjects}
+                        accessMap={accessMap}
                       />
                     )}
                   </div>

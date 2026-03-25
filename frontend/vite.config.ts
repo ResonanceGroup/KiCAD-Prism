@@ -11,9 +11,13 @@ export default defineConfig({
     },
   },
   server: {
+    // Bind on all interfaces so the dev server is reachable from other
+    // devices on the local network (e.g. by IP address).
+    host: "0.0.0.0",
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        // Always proxy to localhost — the backend is on the same machine.
+        target: process.env.VITE_API_URL ?? "http://127.0.0.1:8000",
         changeOrigin: true,
       },
     },
