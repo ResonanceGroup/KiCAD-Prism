@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     )
     
     # ===========================================
-    # GitHub OAuth (Coder-style org restriction)
+    # GitHub Organization-owned OAuth App (recommended)
     # ===========================================
     GITHUB_CLIENT_ID: str = Field(
         default="",
@@ -105,11 +105,17 @@ class Settings(BaseSettings):
         description="GitHub OAuth App Client Secret."
     )
 
-    # Only members of this GitHub org are permitted to log in.
+    # Must match the organization that owns the OAuth App.
     # Leave empty to allow any authenticated GitHub user.
     GITHUB_ORG_LOGIN: str = Field(
         default="",
-        description="GitHub organization slug; only members may log in (e.g. 'yourcompany')."
+        description="GitHub organization slug; must match the org that owns the OAuth App (e.g. 'yourcompanyorg')."
+    )
+
+    # OAuth scopes requested from GitHub.
+    GITHUB_SCOPES: str = Field(
+        default="repo,read:org",
+        description="Comma-separated GitHub OAuth scopes (e.g. 'repo,read:org')."
     )
 
     # ===========================================
