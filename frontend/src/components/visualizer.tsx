@@ -177,6 +177,8 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     const [commitPickerLoading, setCommitPickerLoading] = useState(false);
     const [availableCommits, setAvailableCommits] = useState<CommitEntry[]>([]);
     const [pickerSelection, setPickerSelection] = useState<string[]>([]);
+    const [diffColorNew, setDiffColorNew] = useState("#00AA00");
+    const [diffColorOld, setDiffColorOld] = useState("#FF0000");
 
     const [comments, setComments] = useState<Comment[]>([]);
     const [activePage, setActivePage] = useState<string>("root.kicad_sch");
@@ -1292,6 +1294,23 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
                         )}
                     </div>
                     <DialogFooter>
+                        <div className="flex items-center gap-3 flex-1">
+                            <span className="text-xs text-muted-foreground">Colors:</span>
+                            <label className="flex items-center gap-1.5 cursor-pointer" title="New commit color">
+                                <div className="h-5 w-5 rounded border border-border relative overflow-hidden" style={{ background: diffColorNew }}>
+                                    <input type="color" value={diffColorNew} onChange={e => setDiffColorNew(e.target.value)}
+                                        className="absolute inset-0 opacity-0 w-full h-full cursor-pointer" />
+                                </div>
+                                <span className="text-xs" style={{ color: diffColorNew }}>New</span>
+                            </label>
+                            <label className="flex items-center gap-1.5 cursor-pointer" title="Old commit color">
+                                <div className="h-5 w-5 rounded border border-border relative overflow-hidden" style={{ background: diffColorOld }}>
+                                    <input type="color" value={diffColorOld} onChange={e => setDiffColorOld(e.target.value)}
+                                        className="absolute inset-0 opacity-0 w-full h-full cursor-pointer" />
+                                </div>
+                                <span className="text-xs" style={{ color: diffColorOld }}>Old</span>
+                            </label>
+                        </div>
                         <Button variant="outline" onClick={() => setShowCommitPicker(false)}>Cancel</Button>
                         <Button
                             disabled={pickerSelection.length !== 2}
@@ -1321,6 +1340,8 @@ export function Visualizer({ projectId, user, commit }: VisualizerProps) {
                         projectId={projectId}
                         commit1={diffCommits.commit1}
                         commit2={diffCommits.commit2}
+                        colorNew={diffColorNew}
+                        colorOld={diffColorOld}
                         onClose={() => setShowVisualDiff(false)}
                         onChangeCommits={() => {
                             setShowVisualDiff(false);

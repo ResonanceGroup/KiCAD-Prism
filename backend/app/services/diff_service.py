@@ -206,7 +206,7 @@ def _colorize_svg(svg_path: Path, color: str):
         
     svg_path.write_text(content, encoding="utf-8")
 
-def _run_diff_generation(job_id: str, project_id: str, commit1: str, commit2: str):
+def _run_diff_generation(job_id: str, project_id: str, commit1: str, commit2: str, color_new: str = "#00AA00", color_old: str = "#FF0000"):
     """Execute diff generation in background."""
     job = diff_jobs[job_id]
     
@@ -259,12 +259,10 @@ def _run_diff_generation(job_id: str, project_id: str, commit1: str, commit2: st
         # For simplicity, we scan both, but usually we iterate over the "New" structure 
         # or we just process both folders independently.
         
-        # Define colors
-        # Commit 1 (New) = GREEN
-        # Commit 2 (Old) = RED
-        COLOR_NEW = "#00AA00" # Slightly darker green for visibility on white
-        COLOR_OLD = "#FF0000"
-        
+        # Define colors (user-chosen, defaulting to green/red)
+        COLOR_NEW = color_new
+        COLOR_OLD = color_old
+
         for commit, directory, color in [(commit1, c1_dir, COLOR_NEW), (commit2, c2_dir, COLOR_OLD)]:
             # 1. Locate design files
             sch_file = next(directory.rglob("*.kicad_sch"), None)
@@ -414,7 +412,7 @@ def _run_diff_generation(job_id: str, project_id: str, commit1: str, commit2: st
             (job_dir / "logs.txt").write_text("\n".join(job['logs']), encoding="utf-8")
 
 
-def start_diff_job(project_id: str, commit1: str, commit2: str) -> str:
+def start_diff_job(project_id: str, commit1: str, commit2: str, color_new: str = "#00AA00", color_old: str = "#FF0000") -> str:
     """Start async diff job."""
     job_id = str(uuid.uuid4())
     diff_jobs[job_id] = {
@@ -429,14 +427,14 @@ def start_diff_job(project_id: str, commit1: str, commit2: str) -> str:
         "error": None,
         "abs_output_path": None
     }
-    
+
     thread = threading.Thread(
         target=_run_diff_generation,
-        args=(job_id, project_id, commit1, commit2)
+        args=(job_id, project_id, commit1, commit2, color_new, color_old)
     )
     thread.daemon = True
     thread.start()
-    
+
     return job_id
 
 def get_job_status(job_id: str) -> Optional[dict]:

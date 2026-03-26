@@ -14,6 +14,8 @@ router = APIRouter(dependencies=[Depends(require_viewer)])
 class DiffRequest(BaseModel):
     commit1: str
     commit2: str
+    color_new: str = "#00AA00"
+    color_old: str = "#FF0000"
 
 @router.post("/{project_id}/diff", dependencies=[Depends(require_designer)])
 async def start_diff(
@@ -24,7 +26,7 @@ async def start_diff(
     """Start a visual diff job."""
     get_project_for_role_or_404(project_id, user.role)
     try:
-        job_id = diff_service.start_diff_job(project_id, request.commit1, request.commit2)
+        job_id = diff_service.start_diff_job(project_id, request.commit1, request.commit2, request.color_new, request.color_old)
         return {"job_id": job_id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -9,6 +9,8 @@ interface VisualDiffViewerProps {
     projectId: string;
     commit1: string;  // Newer commit
     commit2: string;  // Older commit
+    colorNew?: string;
+    colorOld?: string;
     onClose: () => void;
     onChangeCommits?: () => void;
 }
@@ -42,7 +44,7 @@ interface DiffManifest {
     } | null;
 }
 
-export function VisualDiffViewer({ projectId, commit1, commit2, onClose, onChangeCommits }: VisualDiffViewerProps) {
+export function VisualDiffViewer({ projectId, commit1, commit2, colorNew = "#00AA00", colorOld = "#FF0000", onClose, onChangeCommits }: VisualDiffViewerProps) {
     const [jobId, setJobId] = useState<string | null>(null);
     const [status, setStatus] = useState<DiffJobStatus | null>(null);
     const [manifest, setManifest] = useState<DiffManifest | null>(null);
@@ -81,7 +83,7 @@ try {
 const res = await fetch(`/api/projects/${projectId}/diff`, {
 method: "POST",
 headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ commit1, commit2 })
+                    body: JSON.stringify({ commit1, commit2, color_new: colorNew, color_old: colorOld })
 });
 
 if (!res.ok) throw new Error("Failed to start diff job");
@@ -301,19 +303,19 @@ centerOnInit
 
 <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full flex items-center justify-center">
 <div className="relative shadow-2xl border bg-white" style={{ minWidth: "1200px", minHeight: "800px" }}>
-{/* Old Commit (Bottom) */}
+{/* Old Commit (Bottom) — lines already colored by backend */}
 <img
-src={oldImg}
-className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-alt="Old Version"
+  src={oldImg}
+  className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+  alt="Old Version"
 />
 
-{/* New Commit (Top) - Opacity controlled */}
+{/* New Commit (Top) — opacity controlled */}
 <img
-src={newImg}
-className="absolute inset-0 w-full h-full object-contain bg-white transition-opacity duration-150 pointer-events-none"
-style={{ opacity: opacity[0] / 100 }}
-alt="New Version"
+  src={newImg}
+  className="absolute inset-0 w-full h-full object-contain bg-white transition-opacity duration-150 pointer-events-none"
+  style={{ opacity: opacity[0] / 100 }}
+  alt="New Version"
 />
 </div>
 </TransformComponent>
@@ -409,7 +411,7 @@ disabled={!manifest.bom}
 {viewMode !== "bom" && (
 <div className="flex items-center gap-3 w-64 bg-background border px-4 py-2 rounded-full shadow-sm">
 <Eye className="h-4 w-4 text-muted-foreground" />
-<span className="text-xs font-semibold w-8 text-right text-red-600">Old</span>
+<span className="text-xs font-semibold w-8 text-right" style={{ color: colorOld }}>Old</span>
 <Slider
 value={opacity}
 onValueChange={setOpacity}
@@ -417,7 +419,7 @@ max={100}
 step={1}
 className="flex-1"
 />
-<span className="text-xs font-semibold w-8 text-green-600">New</span>
+<span className="text-xs font-semibold w-8" style={{ color: colorNew }}>New</span>
 </div>
 )}
 </div>
