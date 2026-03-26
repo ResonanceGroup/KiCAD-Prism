@@ -7,15 +7,19 @@ import logging
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from app.core.config import settings
 from app.core.roles import Role
 from app.core.security import AuthenticatedUser, get_current_user, guest_user
 from app.core.session import clear_session_cookie, create_session_token, set_session_cookie
+from app.db.db import async_session_maker
+from app.db.models import ProjectMembership
 from app.services import access_service
 
 router = APIRouter()
@@ -228,16 +232,34 @@ async def send_test_email(request: TestEmailRequest):
 @router.get("/users/search")
 async def search_users(
     q: str = "",
+    project_id: Optional[str] = None,
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     """
     Return user emails matching the query string (for @mention autocomplete).
     Returns at most 10 results. Requires a logged-in user.
+
+    When ``project_id`` is supplied the results are restricted to users who
+    hold a *manager* or *admin* project-level role on that project (Viewer
+    accounts are excluded because they cannot post comments or reply to
+    mentions).
     """
     if not q or len(q) < 1:
         return []
     q_lower = q.lower()
     assignments = access_service.list_role_assignments()
+
+    if project_id:
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(ProjectMembership).where(
+                    ProjectMembership.project_id == project_id,
+                    ProjectMembership.project_role.in_(["manager", "admin"]),
+                )
+            )
+            member_emails = {m.user_email.lower() for m in result.scalars().all()}
+        assignments = [a for a in assignments if a["email"].lower() in member_emails]
+
     results = [
         {"email": a["email"]}
         for a in assignments

@@ -37,6 +37,7 @@ class Project(BaseModel):
     folder_id: Optional[str] = None  # Optional folder assignment for workspace organization
     portfolio: Optional[Dict[str, Any]] = None  # Portfolio scene/detail metadata
     visibility: str = VISIBILITY_PUBLIC  # public / private / hidden
+    github_source_url: Optional[str] = None  # Set when project was cloned from GitHub
 
 
 class RegisteredProjectRecord(BaseModel):
@@ -53,6 +54,7 @@ class RegisteredProjectRecord(BaseModel):
     parent_repo_path: Optional[str] = None
     folder_id: Optional[str] = None
     visibility: str = VISIBILITY_PUBLIC
+    github_source_url: Optional[str] = None  # Set when project was cloned from GitHub
 
 # PROJECTS_ROOT is where imported projects are stored.
 # In Docker, this should be a persistent volume mount.
@@ -110,7 +112,8 @@ def invalidate_project_caches() -> None:
 def register_project(project_id: str, name: str, path: str, repo_url: str,
                      sub_path: Optional[str] = None, parent_repo: Optional[str] = None,
                      description: Optional[str] = None, folder_id: Optional[str] = None,
-                     visibility: Optional[str] = None) -> None:
+                     visibility: Optional[str] = None,
+                     github_source_url: Optional[str] = None) -> None:
     """Register a project in the registry."""
     registry = _load_project_registry()
     
@@ -132,6 +135,7 @@ def register_project(project_id: str, name: str, path: str, repo_url: str,
         "registered_at": datetime.datetime.now().isoformat(),
         "folder_id": folder_id,
         "visibility": visibility if visibility in VISIBILITY_VALUES else VISIBILITY_PUBLIC,
+        "github_source_url": github_source_url,
     }
     
     _save_project_registry(registry)
@@ -286,6 +290,7 @@ def _record_to_project(record: RegisteredProjectRecord) -> Project:
         folder_id=record.folder_id,
         portfolio=portfolio,
         visibility=record.visibility,
+        github_source_url=record.github_source_url,
     )
 
 
@@ -325,6 +330,7 @@ def get_registered_project_records() -> List[RegisteredProjectRecord]:
                 ),
                 folder_id=data.get("folder_id"),
                 visibility=data.get("visibility", VISIBILITY_PUBLIC),
+                github_source_url=data.get("github_source_url"),
             )
         )
 

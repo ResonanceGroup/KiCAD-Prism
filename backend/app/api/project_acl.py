@@ -174,6 +174,10 @@ async def create_project_from_upload(
     if visibility not in VISIBILITY_VALUES:
         raise HTTPException(status_code=400, detail=f"visibility must be one of {list(VISIBILITY_VALUES)}")
 
+    # Only admins may create hidden projects
+    if visibility == VISIBILITY_HIDDEN and user.role not in ("admin",):
+        raise HTTPException(status_code=403, detail="Only admins can create hidden projects")
+
     safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in name).strip()
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid project name")
@@ -333,6 +337,7 @@ async def discover_projects(
             "my_role": has_access,
             "my_membership_role": membership.project_role if membership else None,
             "pending_request": pending.requested_role if pending else None,
+            "github_source_url": p.github_source_url,
         })
     return result
 
@@ -634,6 +639,26 @@ async def request_project_access(
 
     if body.requested_role not in ("viewer", "manager"):
         raise HTTPException(status_code=400, detail="requested_role must be viewer or manager")
+
+    # System admins are auto-approved with project-admin role
+    if user.role == "admin":
+        membership = await project_acl_service.upsert_membership(
+            session,
+            project_id=project_id,
+            user_email=user.email,
+            project_role="admin",
+            added_by="system:auto_approved",
+        )
+        return {
+            "id": None,
+            "project_id": project_id,
+            "user_email": user.email,
+            "requested_role": "admin",
+            "status": "auto_approved",
+            "requested_at": datetime.utcnow().isoformat(),
+            "reviewed_by": "system",
+            "reviewed_at": datetime.utcnow().isoformat(),
+        }
 
     req = await project_acl_service.create_access_request(
         session, project_id, user.email, body.requested_role

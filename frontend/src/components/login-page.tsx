@@ -140,7 +140,10 @@ export function LoginPage({
   };
 
   const handleGitHubSignIn = () => {
-    window.location.href = "/api/auth/github/authorize";
+    // Pass the current origin as the redirect_url so fastapi-users returns
+    // the user to the SPA after the OAuth callback completes.
+    const redirectUrl = encodeURIComponent(window.location.origin + "/");
+    window.location.href = `/api/auth/github/authorize?redirect_url=${redirectUrl}`;
   };
 
   const handleEmailSignIn = async (e: React.FormEvent) => {

@@ -108,6 +108,21 @@ def _auto_approve_in_rbac(email: str) -> None:
             logger.error("Failed to auto-approve %s in RBAC: %s", email, exc)
 
 
+def _auto_assign_github_designer(email: str) -> None:
+    """Assign 'designer' role to GitHub org members on first OAuth sign-in.
+
+    Upgrades an existing 'viewer' role to 'designer' to ensure org members
+    always receive at least designer access.  Admins are never downgraded.
+    """
+    existing = access_service.resolve_user_role(email)
+    if existing in (None, "viewer"):
+        try:
+            access_service.upsert_user_role(email.lower(), "designer", "system:github_oauth")
+            logger.info("Auto-assigned designer role to GitHub org member: %s", email)
+        except Exception as exc:
+            logger.error("Failed to assign designer role to %s: %s", email, exc)
+
+
 async def _notify_admins_new_registration(new_user_email: str) -> None:
     """Email all current admins when a non-whitelisted user registers."""
     admin_emails: list[str] = list(settings.BOOTSTRAP_ADMIN_USERS)
@@ -187,22 +202,19 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     ) -> None:
         """Called after email/password registration.
 
-        - Whitelisted domain  → writes a 'viewer' RBAC entry automatically.
-        - Other domain        → no RBAC entry; access is denied until an admin
-                                assigns a role via the existing RBAC UI
-                                (PUT /api/settings/access/users/{email}).
+        All new email/password accounts are automatically granted the 'viewer'
+        role so they can immediately explore the workspace.  An admin can
+        promote the user to 'designer' or 'admin' at any time via the RBAC UI.
+
+        Bootstrap admins and users that already have a role assignment are left
+        untouched.
         """
-        if _is_domain_whitelisted(user.email):
-            _auto_approve_in_rbac(user.email)
-        elif access_service.resolve_user_role(user.email) is not None:
-            # Bootstrap admin or already has a role — skip pending queue.
-            pass
-        else:
+        if access_service.resolve_user_role(user.email) is None:
             try:
-                access_service.add_pending_user(user.email)
+                access_service.upsert_user_role(user.email.lower(), "viewer", "system:email_register")
+                logger.info("Auto-assigned viewer role to new email user: %s", user.email)
             except Exception as exc:
-                logger.error("Failed to add %s to pending queue: %s", user.email, exc)
-            await _notify_admins_new_registration(user.email)
+                logger.error("Failed to assign viewer role to %s: %s", user.email, exc)
 
         if not user.is_verified:
             try:
@@ -278,6 +290,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             _auto_approve_in_rbac(user.email)
 
         # GitHub org membership re-check for users with a linked GitHub account.
+        # When the org check passes, also ensure the user has at least designer role.
         if settings.GITHUB_ORG_LOGIN:
             github_account = next(
                 (acc for acc in (user.oauth_accounts or []) if acc.oauth_name == "github"),
@@ -285,6 +298,8 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             )
             if github_account and github_account.access_token:
                 await _check_github_org_membership(github_account.access_token)
+                # Promote to designer if still at viewer level
+                _auto_assign_github_designer(user.email)
 
         if response is None:
             return
@@ -335,8 +350,9 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             encrypted = encrypt_token(access_token)
             if encrypted is not None:
                 user = await self.user_db.update(user, {"github_access_token_encrypted": encrypted})
-
-        if _is_domain_whitelisted(account_email):
+            # GitHub org members are auto-promoted to designer
+            _auto_assign_github_designer(account_email)
+        elif _is_domain_whitelisted(account_email):
             _auto_approve_in_rbac(account_email)
 
         return user
