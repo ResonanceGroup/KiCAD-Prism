@@ -4,7 +4,7 @@ import type { User, AuthConfig } from './types/auth';
 import { Button } from '@/components/ui/button';
 import { Toaster, toast } from 'sonner';
 import { Input } from '@/components/ui/input';
-import { Search, Bell } from 'lucide-react';
+import { Search, Bell, Github, LogOut, CheckCircle2, AlertCircle } from 'lucide-react';
 import { ApiHttpError, fetchApi, fetchJson } from '@/lib/api';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
@@ -65,6 +65,7 @@ function App() {
     const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
     const [pendingAccessRequests, setPendingAccessRequests] = useState<PendingAccessRequest[]>([]);
     const [bellOpen, setBellOpen] = useState(false);
+    const [profileOpen, setProfileOpen] = useState(false);
     const inviteIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Fetch auth configuration on mount
@@ -404,10 +405,79 @@ function App() {
                                                     )}
                                                 </PopoverContent>
                                             </Popover>
-                                            <span className="text-sm text-muted-foreground">
-                                                Welcome, {user.name} ({user.role})
-                                            </span>
-                                            <Button variant="ghost" size="sm" onClick={handleLogout}>Logout</Button>
+
+                                            {/* User profile popover */}
+                                            <Popover open={profileOpen} onOpenChange={setProfileOpen}>
+                                                <PopoverTrigger asChild>
+                                                    <Button variant="ghost" size="sm" className="flex items-center gap-1.5 px-2">
+                                                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-semibold">
+                                                            {user.name.charAt(0).toUpperCase()}
+                                                        </div>
+                                                        <span className="text-sm hidden sm:inline">{user.name}</span>
+                                                    </Button>
+                                                </PopoverTrigger>
+                                                <PopoverContent align="end" className="w-72 p-0">
+                                                    {/* Header */}
+                                                    <div className="border-b px-4 py-3">
+                                                        <p className="text-sm font-semibold truncate">{user.name}</p>
+                                                        <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+                                                        <Badge variant="outline" className="mt-1 capitalize text-[10px]">
+                                                            {user.role}
+                                                        </Badge>
+                                                    </div>
+
+                                                    {/* GitHub connection section */}
+                                                    {authConfig?.github_client_id && (
+                                                        <div className="border-b px-4 py-3 space-y-2">
+                                                            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                                                GitHub
+                                                            </p>
+                                                            {user.github_connected ? (
+                                                                <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+                                                                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                                                                    <span>GitHub account linked</span>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="space-y-2">
+                                                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                                        <AlertCircle className="h-4 w-4 shrink-0" />
+                                                                        <span>GitHub not connected</span>
+                                                                    </div>
+                                                                    <Button
+                                                                        variant="outline"
+                                                                        size="sm"
+                                                                        className="w-full"
+                                                                        onClick={() => {
+                                                                            setProfileOpen(false);
+                                                                            const redirectUrl = encodeURIComponent(window.location.origin + "/");
+                                                                            window.location.href = `/api/auth/github/authorize?redirect_url=${redirectUrl}`;
+                                                                        }}
+                                                                    >
+                                                                        <Github className="h-4 w-4 mr-2" />
+                                                                        Connect GitHub Account
+                                                                    </Button>
+                                                                    <p className="text-[11px] text-muted-foreground leading-snug">
+                                                                        Connecting grants designer access and enables GitHub repository browsing. Your GitHub account must be a member of the organization.
+                                                                    </p>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Logout */}
+                                                    <div className="px-4 py-2">
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="w-full justify-start text-muted-foreground hover:text-foreground"
+                                                            onClick={() => { setProfileOpen(false); handleLogout(); }}
+                                                        >
+                                                            <LogOut className="h-4 w-4 mr-2" />
+                                                            Sign out
+                                                        </Button>
+                                                    </div>
+                                                </PopoverContent>
+                                            </Popover>
                                         </>
                                     )}
                                     {user && user.email === 'guest@local' && (

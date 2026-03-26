@@ -2,15 +2,18 @@
 
 All routes are prefixed with /api/github by the router mounting in main.py.
 
+All repository operations use the GitHub App installation token rather than
+per-user OAuth tokens.  This means every designer-or-above user can browse
+and clone repositories that the GitHub App has been installed on, without
+needing to have signed in with GitHub themselves.
+
 Flow
 ----
-1.  ``GET  /api/github/repos``        — list repositories the authenticated user
-    can access via their stored GitHub OAuth token.  Requires the user to have
-    signed in with GitHub (or to be a bootstrap admin with a server-level token
-    configured via GITHUB_TOKEN).
+1.  ``GET  /api/github/repos``        — list repositories accessible to the
+    GitHub App installation (filtered to ``GITHUB_ORG_LOGIN`` when set).
 2.  ``POST /api/github/repos/clone``  — clone a GitHub repository onto the
-    server, register it as a KiCAD Prism project, and add the requesting user
-    as a project member with *manager* role.
+    server using the App token, register it as a KiCAD Prism project, and
+    add the requesting user as a project member with *manager* role.
 """
 
 from __future__ import annotations
@@ -26,16 +29,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_current_user_with_github_token
 from app.core.config import settings
 from app.core.security import AuthenticatedUser, require_designer
 from app.db.db import get_async_session
-from app.db.models import User
-from app.github import get_github_client
+from app.github_app import get_app_installation_client, is_app_configured
 from app.services import project_acl_service, project_service
 from app.services.project_service import (
     VISIBILITY_HIDDEN,
-    VISIBILITY_PRIVATE,
     VISIBILITY_PUBLIC,
     VISIBILITY_VALUES,
 )
@@ -43,8 +43,8 @@ from app.services.project_service import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-SUBPROCESS_TIMEOUT = 120  # seconds
-MAX_CLONE_ERROR_MESSAGE_LENGTH = 500  # characters to include from git stderr in error responses
+SUBPROCESS_TIMEOUT = 120  # seconds for git clone
+MAX_CLONE_ERROR_LENGTH = 500  # characters of git stderr to include in error responses
 
 
 # ---------------------------------------------------------------------------
@@ -52,8 +52,8 @@ MAX_CLONE_ERROR_MESSAGE_LENGTH = 500  # characters to include from git stderr in
 # ---------------------------------------------------------------------------
 
 class CloneRequest(BaseModel):
-    clone_url: str  # HTTPS clone URL, e.g. https://github.com/org/repo.git
-    name: str       # Display name for the project on the server
+    clone_url: str   # HTTPS clone URL, e.g. https://github.com/org/repo.git
+    name: str        # Display name for the project on the server
     description: str = ""
     visibility: str = VISIBILITY_PUBLIC  # public / private (hidden requires admin)
 
@@ -62,26 +62,29 @@ class CloneRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_effective_github_token(user: User, user_token: Optional[str]) -> Optional[str]:
-    """Return the best available GitHub token for the given user.
+def _inject_app_token_into_url(clone_url: str, token: str) -> str:
+    """Return *clone_url* with the GitHub App installation token embedded.
 
-    Priority:
-    1. The user's own decrypted OAuth token (only present when they signed in via GitHub).
-    2. The server-level GITHUB_TOKEN from environment (useful for bootstrap admins
-       and email-only users when an org-level PAT is configured by the server admin).
+    GitHub App installation tokens use the ``x-access-token`` username format::
+
+        https://x-access-token:{token}@github.com/org/repo.git
     """
-    if user_token:
-        return user_token
-    if settings.GITHUB_TOKEN:
-        return settings.GITHUB_TOKEN
-    return None
-
-
-def _inject_token_into_url(clone_url: str, token: str) -> str:
-    """Return *clone_url* with the token embedded for authenticated HTTPS cloning."""
     if clone_url.startswith("https://"):
-        return clone_url.replace("https://", f"https://{token}@", 1)
+        return clone_url.replace("https://", f"https://x-access-token:{token}@", 1)
     return clone_url
+
+
+def _require_app_configured() -> None:
+    """Raise HTTP 503 when the GitHub App is not configured."""
+    if not is_app_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "GitHub App integration is not configured on this server. "
+                "Ask your admin to set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, "
+                "and GITHUB_APP_INSTALLATION_ID."
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -90,56 +93,51 @@ def _inject_token_into_url(clone_url: str, token: str) -> str:
 
 @router.get("/repos")
 async def list_github_repos(
-    user_and_token: tuple = Depends(get_current_user_with_github_token),
-    _: AuthenticatedUser = Depends(require_designer),
+    auth_user: AuthenticatedUser = Depends(require_designer),
 ):
-    """Return GitHub repositories visible to the authenticated user.
+    """Return GitHub repositories accessible to the GitHub App installation.
 
-    Uses the user's OAuth token (preferred) or the server-level GITHUB_TOKEN.
-    Returns repositories from the configured org (GITHUB_ORG_LOGIN) when set,
-    otherwise returns all repositories accessible to the user.
+    When ``GITHUB_ORG_LOGIN`` is set the list is scoped to that organization;
+    otherwise all repositories accessible to the installation are returned.
     """
-    user, user_token = user_and_token
-    token = _get_effective_github_token(user, user_token)
-
-    if not token:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "No GitHub token available. Sign in with GitHub or ask your server "
-                "admin to configure GITHUB_TOKEN."
-            ),
-        )
+    _require_app_configured()
 
     try:
-        async with await get_github_client(token) as client:
+        async with await get_app_installation_client() as client:
             org = settings.GITHUB_ORG_LOGIN
             if org:
-                # List repos the OAuth app / PAT can see within the org
                 resp = await client.get(
                     f"/orgs/{org}/repos",
                     params={"per_page": 100, "sort": "updated", "type": "all"},
                 )
             else:
-                # Fall back to listing all repos accessible to the authenticated user
                 resp = await client.get(
-                    "/user/repos",
-                    params={"per_page": 100, "sort": "updated", "affiliation": "owner,collaborator,organization_member"},
+                    "/installation/repositories",
+                    params={"per_page": 100},
                 )
 
             if resp.status_code == 401:
-                raise HTTPException(status_code=401, detail="GitHub token is invalid or expired")
+                raise HTTPException(
+                    status_code=401,
+                    detail="GitHub App token is invalid or expired",
+                )
             if resp.status_code == 403:
-                raise HTTPException(status_code=403, detail="GitHub token lacks required permissions")
+                raise HTTPException(
+                    status_code=403,
+                    detail="GitHub App lacks required permissions",
+                )
             resp.raise_for_status()
-            repos = resp.json()
+            raw = resp.json()
+            # /installation/repositories wraps the list under a key
+            repos = raw.get("repositories", raw) if isinstance(raw, dict) else raw
+
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Failed to list GitHub repos: %s", exc)
+        logger.error("Failed to list GitHub repos via App: %s", exc)
         raise HTTPException(status_code=502, detail=f"GitHub API error: {exc}")
 
-    # Determine which repos are already registered on the server
+    # Mark repos that are already registered on this server
     registered_projects = project_service.get_registered_projects()
     cloned_urls = {
         (p.github_source_url or "").rstrip("/").lower()
@@ -150,7 +148,6 @@ async def list_github_repos(
     result = []
     for repo in repos:
         clone_url = repo.get("clone_url") or repo.get("html_url", "")
-        already_cloned = clone_url.rstrip("/").lower() in cloned_urls
         result.append({
             "id": repo.get("id"),
             "name": repo.get("name"),
@@ -160,7 +157,7 @@ async def list_github_repos(
             "html_url": repo.get("html_url"),
             "private": repo.get("private", False),
             "updated_at": repo.get("updated_at"),
-            "already_cloned": already_cloned,
+            "already_cloned": clone_url.rstrip("/").lower() in cloned_urls,
         })
 
     return result
@@ -169,45 +166,45 @@ async def list_github_repos(
 @router.post("/repos/clone")
 async def clone_github_repo(
     body: CloneRequest,
-    user_and_token: tuple = Depends(get_current_user_with_github_token),
-    designer_user: AuthenticatedUser = Depends(require_designer),
+    auth_user: AuthenticatedUser = Depends(require_designer),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Clone a GitHub repository onto the server and register it as a project.
 
     - The requesting user is added as a *manager* of the new project.
-    - The project is read-only from GitHub (no push access is configured).
+    - The clone is read-only from GitHub (``origin`` remote is removed after
+      cloning to prevent accidental pushes).
     - Visibility is enforced: only admins may create hidden projects.
     """
-    user, user_token = user_and_token
-    # Use designer_user for role checks (it's the same user, just a different dependency result)
-    auth_user = designer_user
+    _require_app_configured()
 
     if body.visibility not in VISIBILITY_VALUES:
-        raise HTTPException(status_code=400, detail=f"visibility must be one of {list(VISIBILITY_VALUES)}")
-
-    if body.visibility == VISIBILITY_HIDDEN and auth_user.role not in ("admin",):
-        raise HTTPException(status_code=403, detail="Only admins can create hidden projects")
-
-    token = _get_effective_github_token(user, user_token)
-    if not token:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "No GitHub token available. Sign in with GitHub or ask your server "
-                "admin to configure GITHUB_TOKEN."
-            ),
+            detail=f"visibility must be one of {list(VISIBILITY_VALUES)}",
+        )
+
+    if body.visibility == VISIBILITY_HIDDEN and auth_user.role not in ("admin",):
+        raise HTTPException(
+            status_code=403, detail="Only admins can create hidden projects"
         )
 
     safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in body.name).strip()
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid project name")
 
+    # Fetch the installation token once up-front (cached, so cheap)
+    try:
+        from app.github_app import get_installation_token
+        token = await get_installation_token()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
     project_id = str(uuid.uuid4())
     project_dir = os.path.join(project_service.PROJECTS_ROOT, "type1", project_id)
     os.makedirs(project_dir, exist_ok=True)
 
-    authenticated_url = _inject_token_into_url(body.clone_url, token)
+    authenticated_url = _inject_app_token_into_url(body.clone_url, token)
 
     try:
         result = subprocess.run(
@@ -217,16 +214,17 @@ async def clone_github_repo(
             timeout=SUBPROCESS_TIMEOUT,
         )
         if result.returncode != 0:
-            # Mask the token in error messages before logging / returning
             safe_stderr = result.stderr.replace(token, "***")
             logger.error("git clone failed: %s", safe_stderr)
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to clone repository: {safe_stderr[:MAX_CLONE_ERROR_MESSAGE_LENGTH]}",
+                detail=f"Failed to clone repository: {safe_stderr[:MAX_CLONE_ERROR_LENGTH]}",
             )
     except subprocess.TimeoutExpired:
         shutil.rmtree(project_dir, ignore_errors=True)
-        raise HTTPException(status_code=504, detail="Clone timed out (repository may be too large)")
+        raise HTTPException(
+            status_code=504, detail="Clone timed out (repository may be too large)"
+        )
     except HTTPException:
         shutil.rmtree(project_dir, ignore_errors=True)
         raise
@@ -234,7 +232,7 @@ async def clone_github_repo(
         shutil.rmtree(project_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"Clone error: {exc}") from exc
 
-    # Remove the remote so the local repo becomes read-only (no accidental pushes)
+    # Remove the remote to prevent accidental pushes
     try:
         subprocess.run(
             ["git", "remote", "remove", "origin"],
@@ -255,7 +253,7 @@ async def clone_github_repo(
         github_source_url=body.clone_url,
     )
 
-    # Add the cloning user as a project manager
+    # Add the cloning user as project manager
     await project_acl_service.upsert_membership(
         session,
         project_id=project_id,
@@ -270,3 +268,4 @@ async def clone_github_repo(
         "visibility": body.visibility,
         "github_source_url": body.clone_url,
     }
+

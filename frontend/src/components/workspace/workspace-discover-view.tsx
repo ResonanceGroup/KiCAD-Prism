@@ -466,7 +466,8 @@ export function WorkspaceDiscoverView({ user }: WorkspaceDiscoverViewProps) {
                             <p className="font-medium mb-1">Could not load GitHub repositories</p>
                             <p className="text-xs opacity-80">{githubError}</p>
                             <p className="text-xs mt-2 opacity-70">
-                                Make sure you are signed in with GitHub or that the server has a GITHUB_TOKEN configured.
+                                Ask your server admin to configure the GitHub App integration
+                                (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_APP_INSTALLATION_ID).
                             </p>
                         </div>
                     )}
