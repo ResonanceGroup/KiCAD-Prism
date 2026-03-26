@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app.api._helpers import get_project_for_role_or_404, require_output_type, resolve_path_within_root
@@ -643,13 +643,25 @@ async def get_project_readme(
 async def get_project_asset(
     project_id: str,
     asset_path: str,
+    commit: Optional[str] = None,
+    download: bool = False,
     user: AuthenticatedUser = Depends(require_viewer),
 ):
     """
     Serve assets (images, etc.) from project directory.
-    Typically used for README image references.
+    Typically used for README image references and subsheet files.
+    If commit is provided, serve the asset from that commit.
+    If download is True, force attachment disposition.
     """
     project = get_project_for_role_or_404(project_id, user.role)
+
+    if commit:
+        try:
+            content = _read_file_from_commit(project, commit, asset_path)
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="Asset not found at commit")
+        return Response(content=content, media_type="text/plain")
+
     file_path = resolve_path_within_root(project.path, asset_path, invalid_detail="Invalid asset path")
 
     if not file_path.exists():
@@ -658,6 +670,12 @@ async def get_project_asset(
     if file_path.is_dir():
         raise HTTPException(status_code=400, detail="Cannot serve directory")
 
+    if download:
+        return FileResponse(
+            file_path,
+            filename=file_path.name,
+            content_disposition_type="attachment",
+        )
     return FileResponse(file_path)
 
 @router.get("/{project_id}/docs")
@@ -773,21 +791,38 @@ async def get_project_commits(
 
 
 @router.get("/{project_id}/schematic")
-async def get_project_schematic(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_schematic(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer)):
     project = get_project_for_role_or_404(project_id, user.role)
     
     path = project_service.find_schematic_file(project.path)
     if not path:
         raise HTTPException(status_code=404, detail="Schematic not found")
+
+    if commit:
+        rel_path = os.path.relpath(path, project.path).replace(os.sep, "/")
+        try:
+            content = _read_file_from_commit(project, commit, rel_path)
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="Schematic not found at commit")
+        return Response(content=content, media_type="text/plain")
+
     return FileResponse(path)
 
 @router.get("/{project_id}/schematic/subsheets")
-async def get_project_subsheets(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_subsheets(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer)):
     project = get_project_for_role_or_404(project_id, user.role)
     
     main_path = project_service.find_schematic_file(project.path)
     if not main_path:
         raise HTTPException(status_code=404, detail="Schematic not found")
+    
+    if commit:
+        subsheets = sorted(project_service.get_subsheets(project.path, main_path))
+        subsheet_urls = [
+            {"name": s, "url": f"/api/projects/{project_id}/asset/{s}?commit={commit}"}
+            for s in subsheets
+        ]
+        return {"files": subsheet_urls}
         
     subsheets = sorted(project_service.get_subsheets(project.path, main_path))
     # Convert filenames to URLs
@@ -795,13 +830,38 @@ async def get_project_subsheets(project_id: str, user: AuthenticatedUser = Depen
     return {"files": subsheet_urls}
 
 @router.get("/{project_id}/pcb")
-async def get_project_pcb(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_pcb(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer)):
     project = get_project_for_role_or_404(project_id, user.role)
     
     path = project_service.find_pcb_file(project.path)
     if not path:
         raise HTTPException(status_code=404, detail="PCB not found")
+
+    if commit:
+        rel_path = os.path.relpath(path, project.path).replace(os.sep, "/")
+        try:
+            content = _read_file_from_commit(project, commit, rel_path)
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="PCB not found at commit")
+        return Response(content=content, media_type="text/plain")
+
     return FileResponse(path)
+
+@router.get("/{project_id}/3d-model/info")
+async def get_project_3d_model_info(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+    """Return the asset URL and filename for the 3D model.
+    Clients should use the returned URL directly so the filename extension is preserved
+    (online-3d-viewer infers the format from the URL extension).
+    """
+    project = get_project_for_role_or_404(project_id, user.role)
+
+    path = project_service.find_3d_model(project.path)
+    if not path:
+        raise HTTPException(status_code=404, detail="3D model not found")
+
+    rel_path = os.path.relpath(path, project.path).replace(os.sep, "/")
+    filename = os.path.basename(path)
+    return {"url": f"/api/projects/{project_id}/asset/{rel_path}", "filename": filename}
 
 @router.get("/{project_id}/3d-model")
 async def get_project_3d_model(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
@@ -810,7 +870,11 @@ async def get_project_3d_model(project_id: str, user: AuthenticatedUser = Depend
     path = project_service.find_3d_model(project.path)
     if not path:
         raise HTTPException(status_code=404, detail="3D model not found")
-    return FileResponse(path)
+
+    # Redirect to the asset URL so the filename (with extension) is preserved in the URL.
+    # online-3d-viewer infers format from the URL extension, so /3d-model (no extension) breaks STEP/STP.
+    rel_path = os.path.relpath(path, project.path).replace(os.sep, "/")
+    return RedirectResponse(url=f"/api/projects/{project_id}/asset/{rel_path}", status_code=307)
 
 @router.get("/{project_id}/ibom")
 async def get_project_ibom(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
@@ -820,6 +884,38 @@ async def get_project_ibom(project_id: str, user: AuthenticatedUser = Depends(re
     if not path:
         raise HTTPException(status_code=404, detail="iBoM not found")
     return FileResponse(path)
+
+
+@router.get("/{project_id}/bom")
+async def get_project_bom(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+    """Generate a BOM from the project's schematic files (main + sub-sheets).
+
+    Components are grouped by Value. Returns a list of BOM row objects with
+    ``value``, ``quantity``, ``references``, ``footprints``, ``datasheet``,
+    ``description``, and ``extra_fields``.
+    """
+    project = get_project_for_role_or_404(project_id, user.role)
+
+    main_path = project_service.find_schematic_file(project.path)
+    if not main_path:
+        raise HTTPException(status_code=404, detail="Schematic not found")
+
+    # Collect all schematic files: main + sub-sheets
+    sch_files: list[str] = [main_path]
+    for rel in project_service.get_subsheets(project.path, main_path):
+        abs_path = os.path.join(project.path, rel)
+        if os.path.isfile(abs_path):
+            sch_files.append(abs_path)
+
+    all_components: list[dict] = []
+    for sch_file in sch_files:
+        try:
+            text = Path(sch_file).read_text(encoding="utf-8")
+            all_components.extend(project_properties_service.parse_bom_from_schematic(text))
+        except OSError:
+            pass
+
+    return project_properties_service.build_bom(all_components)
 
 
 # Path Configuration Endpoints
@@ -862,6 +958,90 @@ async def detect_project_paths(project_id: str, user: AuthenticatedUser = Depend
         "detected": detected.model_dump(),
         "validation": path_config_service.validate_config(project.path, detected)
     }
+
+
+@router.get("/{project_id}/filetree")
+async def get_project_filetree(
+    project_id: str,
+    user: AuthenticatedUser = Depends(require_viewer),
+):
+    """
+    List all files and directories in the project directory recursively.
+    Used by the frontend file browser to allow manual path association.
+    """
+    project = get_project_for_role_or_404(project_id, user.role)
+    project_path = Path(project.path)
+
+    if not project_path.exists():
+        raise HTTPException(status_code=404, detail="Project path not found")
+
+    SKIP_DIRS = {".git", "__pycache__", ".tox", "node_modules"}
+
+    files: list[str] = []
+    dirs: list[str] = []
+
+    for item in sorted(project_path.rglob("*")):
+        rel = item.relative_to(project_path)
+        parts = rel.parts
+        # Skip hidden entries and known non-project directories
+        if any(p.startswith(".") or p in SKIP_DIRS for p in parts):
+            continue
+        rel_str = "/".join(parts)
+        if item.is_dir():
+            dirs.append(rel_str)
+        else:
+            files.append(rel_str)
+
+    return {"files": files, "dirs": dirs}
+
+
+_FILES_ALL_SKIP = {".git", "__pycache__", ".tox", "node_modules"}
+
+
+@router.get("/{project_id}/files/all", response_model=List[file_service.FileItem])
+async def get_all_project_files(
+    project_id: str,
+    user: AuthenticatedUser = Depends(require_viewer),
+):
+    """
+    Return all files and folders in the project directory recursively,
+    suitable for the Assets Portal file browser.
+    """
+    project = get_project_for_role_or_404(project_id, user.role)
+    project_path = Path(project.path)
+
+    if not project_path.exists():
+        raise HTTPException(status_code=404, detail="Project path not found")
+
+    from datetime import datetime as _dt
+    items: list[file_service.FileItem] = []
+
+    def _scan(directory: Path, base: str) -> None:
+        try:
+            entries = sorted(directory.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+        except PermissionError:
+            return
+        for entry in entries:
+            if entry.name.startswith(".") or entry.name in _FILES_ALL_SKIP:
+                continue
+            rel = f"{base}/{entry.name}" if base else entry.name
+            stat = entry.stat()
+            modified = _dt.fromtimestamp(stat.st_mtime).isoformat()
+            if entry.is_dir():
+                items.append(file_service.FileItem(
+                    name=entry.name, path=rel, size=0,
+                    modified_date=modified, type="folder", is_dir=True,
+                ))
+                _scan(entry, rel)
+            else:
+                ext = entry.suffix.lstrip(".")
+                items.append(file_service.FileItem(
+                    name=entry.name, path=rel, size=stat.st_size,
+                    modified_date=modified, type=ext or "file", is_dir=False,
+                ))
+
+    _scan(project_path, "")
+    return items
 
 
 @router.put("/{project_id}/config", dependencies=[Depends(require_designer)])

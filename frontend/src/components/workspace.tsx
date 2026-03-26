@@ -320,7 +320,7 @@ export function Workspace({ searchQuery, user }: WorkspaceProps) {
             ) : section === "apps" ? (
               <WorkspaceAppsPlaceholder />
             ) : section === "discover" ? (
-              <div className="p-6">
+              <div className="h-full overflow-y-auto p-6">
                 <WorkspaceDiscoverView user={user} />
               </div>
             ) : (

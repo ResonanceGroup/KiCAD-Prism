@@ -488,7 +488,7 @@ export function ProjectDetailPage({ user }: { user: User | null }) {
                             <div className="flex-1 min-h-0">
                                 {projectId && (
                                     <Suspense fallback={<div className="text-sm text-muted-foreground">Loading visualizers...</div>}>
-                                        <Visualizer projectId={projectId} user={user} />
+                                        <Visualizer projectId={projectId} user={user} commit={currentCommit || undefined} />
                                     </Suspense>
                                 )}
                             </div>

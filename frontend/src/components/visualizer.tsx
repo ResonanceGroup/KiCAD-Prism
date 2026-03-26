@@ -1,11 +1,13 @@
 import { lazy, Suspense, useEffect, useState, useCallback, useRef, useLayoutEffect, useMemo } from "react";
-import { Cpu, Box, FileText, MessageSquarePlus, MessageSquare, GitBranch, CircuitBoard, Link2, Copy, Check } from "lucide-react";
+import { Cpu, Box, FileText, MessageSquarePlus, MessageSquare, GitBranch, GitCompare, CircuitBoard, Link2, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CommentOverlay } from "./comment-overlay";
 import { CommentForm } from "./comment-form";
 import { CommentPanel } from "./comment-panel";
+import { VisualDiffViewer } from "./visual-diff-viewer";
+import { BomViewer } from "./bom-viewer";
 import { fetchApi } from "@/lib/api";
 import type { User } from "@/types/auth";
 import type { Comment, CommentContext } from "@/types/comments";
@@ -19,9 +21,30 @@ const Model3DViewer = lazy(() =>
     import("./model-3d-viewer").then((module) => ({ default: module.Model3DViewer }))
 );
 
+interface CommitEntry {
+    hash: string;
+    full_hash: string;
+    author: string;
+    date: string;
+    message: string;
+}
+
+function formatRelativeDate(isoDate: string): string {
+    const date = new Date(isoDate);
+    const diffMs = Date.now() - date.getTime();
+    const diffDays = Math.floor(diffMs / 86400000);
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays}d ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+    return date.toLocaleDateString();
+}
+
 interface VisualizerProps {
     projectId: string;
     user: User | null;
+    commit?: string;
 }
 
 type VisualizerTab = "sch" | "pcb" | "3d" | "ibom";
@@ -121,7 +144,7 @@ function EcadViewerHost({ viewerKey, sources, setViewerRef }: EcadViewerHostProp
     );
 }
 
-export function Visualizer({ projectId, user }: VisualizerProps) {
+export function Visualizer({ projectId, user, commit }: VisualizerProps) {
     const [schematicViewerElement, setSchematicViewerElement] = useState<ECadViewerElement | null>(null);
     const [pcbViewerElement, setPcbViewerElement] = useState<ECadViewerElement | null>(null);
     const schematicViewerRef = useRef<ECadViewerElement | null>(null);
@@ -143,10 +166,17 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
     const [subsheets, setSubsheets] = useState<{ filename: string, content: string }[]>([]);
     const [pcbContent, setPcbContent] = useState<string | null>(null);
     const [modelUrl, setModelUrl] = useState<string | null>(null);
-    const [ibomUrl, setIbomUrl] = useState<string | null>(null);
     const [schematicContentLoaded, setSchematicContentLoaded] = useState(false);
     const [pcbContentLoaded, setPcbContentLoaded] = useState(false);
     const [loading, setLoading] = useState(true);
+
+    // Visual diff state
+    const [showVisualDiff, setShowVisualDiff] = useState(false);
+    const [diffCommits, setDiffCommits] = useState<{ commit1: string; commit2: string } | null>(null);
+    const [showCommitPicker, setShowCommitPicker] = useState(false);
+    const [commitPickerLoading, setCommitPickerLoading] = useState(false);
+    const [availableCommits, setAvailableCommits] = useState<CommitEntry[]>([]);
+    const [pickerSelection, setPickerSelection] = useState<string[]>([]);
 
     const [comments, setComments] = useState<Comment[]>([]);
     const [activePage, setActivePage] = useState<string>("root.kicad_sch");
@@ -162,7 +192,8 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
     const [commentsSourceUrls, setCommentsSourceUrls] = useState<CommentsSourceUrls | null>(null);
     const [isUrlsPopoverOpen, setIsUrlsPopoverOpen] = useState(false);
     const [copiedField, setCopiedField] = useState<string | null>(null);
-    const canModifyComments = user?.role === "admin" || user?.role === "designer";
+    const [myProjectRole, setMyProjectRole] = useState<string | null>(null);
+    const canModifyComments = myProjectRole === "manager" || myProjectRole === "admin";
     const lastCrossProbeRef = useRef<Record<CrossProbeContext, string | null>>({
         SCH: null,
         PCB: null,
@@ -348,46 +379,41 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
 
             try {
                 // Parallel fetch for main assets (excluding schematic and PCB content for now)
-                const [modelRes, ibomRes, commentsRes, filesRes] = await Promise.allSettled([
-                    fetch(`${baseUrl}/3d-model`, { signal }),
-                    fetch(`${baseUrl}/ibom`, { signal }),
+                const [modelRes, commentsRes, membersRes] = await Promise.allSettled([
+                    fetch(`${baseUrl}/3d-model/info`, { signal }),
                     fetch(`/api/projects/${projectId}/comments`, { signal }),
-                    fetch(`${baseUrl}/files?type=design`, { signal })
+                    fetch(`/api/projects/${projectId}/members`, { signal }),
                 ]);
 
-                // Handle 3D
-                let glbUrl = null;
-                if (filesRes.status === "fulfilled" && filesRes.value.ok) {
+                // Resolve project-level role for this user
+                if (membersRes.status === "fulfilled" && membersRes.value.ok) {
                     try {
-                        const files = await filesRes.value.json();
-                        if (signal.aborted) return;
-                        const glbFile = files.find((f: any) =>
-                            f.path.toLowerCase().startsWith("3dmodel/") &&
-                            f.name.toLowerCase().endsWith(".glb")
-                        );
-                        if (glbFile) {
-                            glbUrl = `${baseUrl}/asset/Design-Outputs/${glbFile.path}`;
+                        const members: Array<{ user_email: string; project_role: string }> = await membersRes.value.json();
+                        if (!signal.aborted) {
+                            const me = user?.email?.toLowerCase();
+                            const myMembership = members.find((m) => m.user_email.toLowerCase() === me);
+                            setMyProjectRole(myMembership?.project_role ?? null);
                         }
-                    } catch (e) {
-                        if (!isAbortError(e)) {
-                            console.warn("Error parsing design files", e);
-                        }
+                    } catch {
+                        // non-fatal
                     }
                 }
 
-                if (glbUrl) {
-                    setModelUrl(glbUrl);
-                } else if (modelRes.status === "fulfilled" && modelRes.value.ok) {
-                    setModelUrl(`${baseUrl}/3d-model`);
+                // Handle 3D — fetch /3d-model/info to get the real asset URL with file extension.
+                // online-3d-viewer infers format from the URL extension, so we must use the direct asset URL.
+                if (modelRes.status === "fulfilled" && modelRes.value.ok) {
+                    try {
+                        const info = await modelRes.value.json();
+                        if (!signal.aborted && info?.url) {
+                            setModelUrl(info.url as string);
+                        } else {
+                            setModelUrl(null);
+                        }
+                    } catch {
+                        setModelUrl(null);
+                    }
                 } else {
                     setModelUrl(null);
-                }
-
-                // Handle iBoM
-                if (ibomRes.status === "fulfilled" && ibomRes.value.ok) {
-                    setIbomUrl(`${baseUrl}/ibom`);
-                } else {
-                    setIbomUrl(null);
                 }
 
                 // Handle Comments
@@ -439,10 +465,11 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
             const loadSchematic = async () => {
                 try {
                     const baseUrl = `/api/projects/${projectId}`;
+                    const commitParam = commit ? `?commit=${encodeURIComponent(commit)}` : "";
 
                     const [schRes, subsheetsRes] = await Promise.allSettled([
-                        fetch(`${baseUrl}/schematic`, { signal }),
-                        fetch(`${baseUrl}/schematic/subsheets`, { signal })
+                        fetch(`${baseUrl}/schematic${commitParam}`, { signal }),
+                        fetch(`${baseUrl}/schematic/subsheets${commitParam}`, { signal })
                     ]);
 
                     // Handle Schematic
@@ -501,7 +528,7 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
             void loadSchematic();
             return () => controller.abort();
         }
-    }, [activeTab, schematicContentLoaded, projectId]);
+    }, [activeTab, schematicContentLoaded, projectId, commit]);
 
     // Lazy load PCB content when PCB tab is first accessed
     useEffect(() => {
@@ -512,7 +539,8 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
             const loadPcb = async () => {
                 try {
                     const baseUrl = `/api/projects/${projectId}`;
-                    const pcbRes = await fetch(`${baseUrl}/pcb`, { signal });
+                    const commitParam = commit ? `?commit=${encodeURIComponent(commit)}` : "";
+                    const pcbRes = await fetch(`${baseUrl}/pcb${commitParam}`, { signal });
 
                     if (pcbRes.ok) {
                         const pcbText = await pcbRes.text();
@@ -536,7 +564,7 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
             void loadPcb();
             return () => controller.abort();
         }
-    }, [activeTab, pcbContentLoaded, projectId]);
+    }, [activeTab, pcbContentLoaded, projectId, commit]);
 
     // Reset lazy loading flags when project changes
     useEffect(() => {
@@ -546,7 +574,6 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
         setSubsheets([]);
         setPcbContent(null);
         setModelUrl(null);
-        setIbomUrl(null);
         setComments([]);
         setCommentsSourceUrls(null);
         setActivePage("root.kicad_sch");
@@ -565,7 +592,7 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
         clearCrossProbeRetry("SCH");
         clearCrossProbeRetry("PCB");
         crossProbeRunIdRef.current = { SCH: 0, PCB: 0 };
-    }, [projectId, clearCrossProbeRetry]);
+    }, [projectId, commit, clearCrossProbeRetry]);
 
     useEffect(() => {
         return () => {
@@ -877,7 +904,7 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
         { id: "sch",  label: "Schematic",  icon: Cpu },
         { id: "pcb",  label: "PCB Layout", icon: CircuitBoard },
         { id: "3d",   label: "3D View",    icon: Box },
-        { id: "ibom", label: "iBoM",       icon: FileText },
+        { id: "ibom", label: "BOM",        icon: FileText },
     ];
 
     if (loading) return <div className="flex justify-center items-center h-full">Loading Visualizer...</div>;
@@ -1001,6 +1028,37 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                                 Generate JSON
                             </Button>
                         )}
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-xs h-8 ml-1"
+                            title="Compare changes between two commits"
+                            onClick={async () => {
+                                setShowCommitPicker(true);
+                                setPickerSelection([]);
+                                if (availableCommits.length === 0) {
+                                    setCommitPickerLoading(true);
+                                    try {
+                                        const res = await fetchApi(`/api/projects/${projectId}/commits`);
+                                        if (res.ok) {
+                                            const data = await res.json();
+                                            const commits: CommitEntry[] = data.commits ?? data;
+                                            setAvailableCommits(commits);
+                                            if (commits.length >= 2) {
+                                                setPickerSelection([commits[0].full_hash, commits[1].full_hash]);
+                                            }
+                                        }
+                                    } finally {
+                                        setCommitPickerLoading(false);
+                                    }
+                                } else if (availableCommits.length >= 2) {
+                                    setPickerSelection([availableCommits[0].full_hash, availableCommits[1].full_hash]);
+                                }
+                            }}
+                        >
+                            <GitCompare className="w-3 h-3 mr-2" />
+                            Visual Diff
+                        </Button>
                     </>
                 )}
             </div>
@@ -1137,10 +1195,10 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                     </div>
                 )}
 
-                {/* iBoM View */}
+                {/* BOM View */}
                 {activeTab === "ibom" && (
-                    <div className="absolute inset-0 z-20 bg-white">
-                        {ibomUrl ? <iframe src={ibomUrl} className="w-full h-full border-0" /> : <div className="p-10">No iBoM Found</div>}
+                    <div className="absolute inset-0 z-20 bg-background overflow-y-auto">
+                        <BomViewer projectId={projectId} />
                     </div>
                 )}
 
@@ -1169,6 +1227,109 @@ export function Visualizer({ projectId, user }: VisualizerProps) {
                 context={pendingContext}
                 isSubmitting={isSubmittingComment}
             />
+
+            {/* Commit Picker Dialog */}
+            <Dialog open={showCommitPicker} onOpenChange={setShowCommitPicker}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>Select Two Commits to Compare</DialogTitle>
+                        <DialogDescription>
+                            Check exactly 2 commits to open the Visual Diff viewer.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-[400px] overflow-y-auto space-y-1 pr-1">
+                        {commitPickerLoading ? (
+                            <p className="text-sm text-muted-foreground py-4 text-center">Loading commits...</p>
+                        ) : availableCommits.length === 0 ? (
+                            <p className="text-sm text-muted-foreground py-4 text-center">No commits found.</p>
+                        ) : (
+                            availableCommits.map((c) => {
+                                const isSelected = pickerSelection.includes(c.full_hash);
+                                const isDisabled = !isSelected && pickerSelection.length >= 2;
+                                const selectionIndex = pickerSelection.indexOf(c.full_hash);
+                                return (
+                                    <label
+                                        key={c.full_hash}
+                                        className={`flex items-start gap-3 rounded-md border px-3 py-2 cursor-pointer transition-colors ${
+                                            isDisabled ? "opacity-40 cursor-not-allowed" : "hover:bg-muted/50"
+                                        } ${isSelected ? "bg-primary/5 border-primary/40" : ""}`}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            className="mt-1 h-4 w-4 accent-primary shrink-0"
+                                            checked={isSelected}
+                                            disabled={isDisabled}
+                                            onChange={() => {
+                                                setPickerSelection(prev =>
+                                                    isSelected
+                                                        ? prev.filter(h => h !== c.full_hash)
+                                                        : [...prev, c.full_hash]
+                                                );
+                                            }}
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2">
+                                                {isSelected && (
+                                                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                                        selectionIndex === 0
+                                                            ? "bg-green-100 text-green-700"
+                                                            : "bg-red-100 text-red-700"
+                                                    }`}>
+                                                        {selectionIndex === 0 ? "New" : "Old"}
+                                                    </span>
+                                                )}
+                                                <code className="text-[11px] bg-muted px-1.5 py-0.5 rounded shrink-0">{c.hash}</code>
+                                                <span className="text-xs text-muted-foreground shrink-0">{formatRelativeDate(c.date)}</span>
+                                            </div>
+                                            <p className="text-sm mt-0.5 truncate" title={(c.message || "").split('\n')[0]}>
+                                                {(c.message || "").split('\n')[0] || "(no message)"}
+                                            </p>
+                                            <p className="text-xs text-muted-foreground">{c.author}</p>
+                                        </div>
+                                    </label>
+                                );
+                            })
+                        )}
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setShowCommitPicker(false)}>Cancel</Button>
+                        <Button
+                            disabled={pickerSelection.length !== 2}
+                            onClick={() => {
+                                // Preserve chronological order: newer commit first
+                                const idx0 = availableCommits.findIndex(c => c.full_hash === pickerSelection[0]);
+                                const idx1 = availableCommits.findIndex(c => c.full_hash === pickerSelection[1]);
+                                const [newerHash, olderHash] = idx0 < idx1
+                                    ? [pickerSelection[0], pickerSelection[1]]
+                                    : [pickerSelection[1], pickerSelection[0]];
+                                setDiffCommits({ commit1: newerHash, commit2: olderHash });
+                                setShowCommitPicker(false);
+                                setShowVisualDiff(true);
+                            }}
+                        >
+                            <GitCompare className="w-3.5 h-3.5 mr-2" />
+                            Compare {pickerSelection.length === 2 ? "2 Commits" : `(${pickerSelection.length}/2)`}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Visual Diff Overlay */}
+            {showVisualDiff && diffCommits && (
+                <div className="absolute inset-0 z-50 bg-background">
+                    <VisualDiffViewer
+                        projectId={projectId}
+                        commit1={diffCommits.commit1}
+                        commit2={diffCommits.commit2}
+                        onClose={() => setShowVisualDiff(false)}
+                        onChangeCommits={() => {
+                            setShowVisualDiff(false);
+                            setPickerSelection(diffCommits ? [diffCommits.commit1, diffCommits.commit2] : []);
+                            setShowCommitPicker(true);
+                        }}
+                    />
+                </div>
+            )}
         </div>
     );
 }

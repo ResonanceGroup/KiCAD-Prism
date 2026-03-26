@@ -447,10 +447,16 @@ function App() {
                                                                         variant="outline"
                                                                         size="sm"
                                                                         className="w-full"
-                                                                        onClick={() => {
+                                                                        onClick={async () => {
                                                                             setProfileOpen(false);
                                                                             const redirectUrl = encodeURIComponent(window.location.origin + "/");
-                                                                            window.location.href = `/api/auth/github/authorize?redirect_url=${redirectUrl}`;
+                                                                            try {
+                                                                                const res = await fetch(`/api/auth/github/authorize?redirect_url=${redirectUrl}`);
+                                                                                const data = await res.json();
+                                                                                window.location.href = data.authorization_url;
+                                                                            } catch {
+                                                                                console.error("Failed to start GitHub connect flow");
+                                                                            }
                                                                         }}
                                                                     >
                                                                         <Github className="h-4 w-4 mr-2" />

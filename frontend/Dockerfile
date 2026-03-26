@@ -19,8 +19,9 @@ FROM nginx:alpine
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy custom nginx config for SPA routing and API proxy
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copy nginx config as a template — BACKEND_PORT is substituted at container startup
+# via the official nginx Docker image's built-in envsubst support.
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 
 # Expose port 80
 EXPOSE 80

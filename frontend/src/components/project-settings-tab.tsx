@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
     Users, UserPlus, Trash2, Loader2, Settings2,
-    Globe, Lock, EyeOff, CheckCircle, XCircle, ShieldCheck, Search,
+    Globe, Lock, EyeOff, CheckCircle, XCircle, ShieldCheck, Search, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -210,6 +211,7 @@ function MembersSubTab({ projectId, user }: { projectId: string; user: User | nu
     const [loading, setLoading] = useState(true);
     const [showInvite, setShowInvite] = useState(false);
     const [removingEmail, setRemovingEmail] = useState<string | null>(null);
+    const [promotingEmail, setPromotingEmail] = useState<string | null>(null);
     const [approvingId, setApprovingId] = useState<string | null>(null);
     const [denyingId, setDenyingId] = useState<string | null>(null);
 
@@ -237,6 +239,28 @@ function MembersSubTab({ projectId, user }: { projectId: string; user: User | nu
 
     const myRole = members.find((m) => m.user_email.toLowerCase() === myEmail)?.project_role ?? null;
     const canManage = myRole === "manager" || myRole === "admin";
+
+    const changeRole = async (email: string, newRole: string) => {
+        setPromotingEmail(email);
+        try {
+            const res = await fetchApi(
+                `/api/projects/${projectId}/members/${encodeURIComponent(email)}/role`,
+                {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ project_role: newRole }),
+                },
+            );
+            if (res.ok) {
+                toast.success(`Role updated to ${newRole}`);
+                void load();
+            } else {
+                toast.error(await readApiError(res, "Failed to update role"));
+            }
+        } finally {
+            setPromotingEmail(null);
+        }
+    };
 
     const removeMember = async (email: string) => {
         setRemovingEmail(email);
@@ -320,7 +344,25 @@ function MembersSubTab({ projectId, user }: { projectId: string; user: User | nu
                                             <span className="ml-2 text-xs text-muted-foreground">(you)</span>
                                         )}
                                     </div>
-                                    <RoleBadge role={m.project_role} />
+                                    {canManage ? (
+                                        <div className="relative flex items-center">
+                                            {promotingEmail === m.user_email && (
+                                                <Loader2 className="absolute left-2 h-3 w-3 animate-spin text-muted-foreground pointer-events-none" />
+                                            )}
+                                            <select
+                                                value={m.project_role}
+                                                disabled={promotingEmail === m.user_email}
+                                                onChange={(e) => void changeRole(m.user_email, e.target.value)}
+                                                className="h-7 rounded-md border border-input bg-background pl-2 pr-6 text-xs font-medium capitalize focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 cursor-pointer"
+                                            >
+                                                <option value="viewer">viewer</option>
+                                                <option value="manager">manager</option>
+                                                <option value="admin">admin</option>
+                                            </select>
+                                        </div>
+                                    ) : (
+                                        <RoleBadge role={m.project_role} />
+                                    )}
                                     <div className="w-8 flex justify-end">
                                         {canManage && m.user_email.toLowerCase() !== myEmail && (
                                             <Button
@@ -406,15 +448,26 @@ const VISIBILITY_OPTIONS = [
     { value: "hidden",  label: "Hidden",  icon: EyeOff,  desc: "Does not appear in Discover; only explicit members can access it." },
 ] as const;
 
-function GeneralSubTab({ projectId }: { projectId: string }) {
+function GeneralSubTab({ projectId, userEmail }: { projectId: string; userEmail: string }) {
+    const navigate = useNavigate();
     const [visibility, setVisibility] = useState<string | null>(null);
+    const [projectRole, setProjectRole] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [deleting, setDeleting] = useState(false);
 
     useEffect(() => {
         void fetchApi(`/api/projects/${projectId}/overview`)
             .then((r) => (r.ok ? r.json() : null))
             .then((d) => { if (d?.visibility) setVisibility(d.visibility); });
-    }, [projectId]);
+
+        void fetchApi(`/api/projects/${projectId}/members`)
+            .then((r) => (r.ok ? r.json() : []))
+            .then((members: Array<{ user_email: string; project_role: string }>) => {
+                const me = members.find((m) => m.user_email.toLowerCase() === userEmail.toLowerCase());
+                setProjectRole(me?.project_role ?? null);
+            });
+    }, [projectId, userEmail]);
 
     const save = async (v: string) => {
         setSaving(true);
@@ -432,6 +485,22 @@ function GeneralSubTab({ projectId }: { projectId: string }) {
             }
         } finally {
             setSaving(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        setDeleting(true);
+        try {
+            const res = await fetchApi(`/api/projects/${projectId}`, { method: "DELETE" });
+            if (res.ok) {
+                toast.success("Project removed from server");
+                navigate("/");
+            } else {
+                toast.error(await readApiError(res, "Failed to delete project"));
+                setConfirmDelete(false);
+            }
+        } finally {
+            setDeleting(false);
         }
     };
 
@@ -466,6 +535,58 @@ function GeneralSubTab({ projectId }: { projectId: string }) {
                     ))}
                 </div>
             </div>
+
+            {/* Danger zone — project admins only */}
+            {projectRole === "admin" && (
+                <div className="rounded-lg border border-destructive/40 p-4">
+                    <h3 className="font-semibold text-sm uppercase tracking-wide text-destructive mb-1">
+                        Danger Zone
+                    </h3>
+                    <p className="text-xs text-muted-foreground mb-3">
+                        Removes this project from the server. The GitHub repository is not affected.
+                        This action cannot be undone.
+                    </p>
+                    {!confirmDelete ? (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                            onClick={() => setConfirmDelete(true)}
+                        >
+                            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                            Remove from Server
+                        </Button>
+                    ) : (
+                        <div className="rounded-md bg-destructive/10 border border-destructive/30 p-3 space-y-3">
+                            <div className="flex items-start gap-2 text-sm">
+                                <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                                <span className="text-destructive font-medium">
+                                    Are you sure? The project files will be deleted from this server.
+                                </span>
+                            </div>
+                            <div className="flex gap-2">
+                                <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    disabled={deleting}
+                                    onClick={() => void handleDelete()}
+                                >
+                                    {deleting ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
+                                    Yes, Delete Project
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={deleting}
+                                    onClick={() => setConfirmDelete(false)}
+                                >
+                                    Cancel
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }
@@ -513,7 +634,7 @@ export function ProjectSettingsTab({ projectId, user }: ProjectSettingsTabProps)
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-6">
                 {subTab === "members" && <MembersSubTab projectId={projectId} user={user} />}
-                {subTab === "general" && <GeneralSubTab projectId={projectId} />}
+                {subTab === "general" && <GeneralSubTab projectId={projectId} userEmail={user?.email ?? ""} />}
             </div>
         </div>
     );

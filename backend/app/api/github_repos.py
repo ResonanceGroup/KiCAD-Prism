@@ -134,8 +134,8 @@ async def list_github_repos(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Failed to list GitHub repos via App: %s", exc)
-        raise HTTPException(status_code=502, detail=f"GitHub API error: {exc}")
+        logger.error("Failed to list GitHub repos via App: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"GitHub API error: {type(exc).__name__}: {exc}")
 
     # Mark repos that are already registered on this server
     registered_projects = project_service.get_registered_projects()
@@ -208,7 +208,7 @@ async def clone_github_repo(
 
     try:
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", authenticated_url, project_dir],
+            ["git", "clone", authenticated_url, project_dir],
             capture_output=True,
             text=True,
             timeout=SUBPROCESS_TIMEOUT,

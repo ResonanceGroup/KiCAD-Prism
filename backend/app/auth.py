@@ -169,23 +169,26 @@ async def _check_github_org_membership(access_token: str) -> None:
         "X-GitHub-Api-Version": "2022-11-28",
     }
     async with httpx.AsyncClient() as client:
-        user_resp = await client.get("https://api.github.com/user", headers=headers)
-        if user_resp.status_code != 200:
-            raise HTTPException(status_code=403, detail="Could not verify GitHub identity")
-
-        username = user_resp.json().get("login")
-        if not username:
-            raise HTTPException(status_code=403, detail="Could not retrieve GitHub username")
-
+        # Use /user/memberships/orgs/{org} instead of /orgs/{org}/members/{username}.
+        # The members endpoint returns 404 for private org members; the memberships
+        # endpoint checks the authenticated user's own membership and works for both
+        # public and private membership visibility.
         membership_resp = await client.get(
-            f"https://api.github.com/orgs/{org}/members/{username}",
+            f"https://api.github.com/user/memberships/orgs/{org}",
             headers=headers,
         )
 
-    if membership_resp.status_code != 204:
+    if membership_resp.status_code != 200:
         raise HTTPException(
             status_code=403,
             detail=f"Access denied: you must be a member of the '{org}' GitHub organization.",
+        )
+
+    state = membership_resp.json().get("state", "")
+    if state != "active":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied: your membership in '{org}' is not yet active (state: {state}).",
         )
 
 

@@ -6,12 +6,14 @@ Each project in the registry has:
   - A set of ProjectMembership rows (per-project roles: viewer / manager / admin)
   - A set of ProjectAccessRequest rows (pending/approved/denied)
 
-System-level role mapping:
-  - System "viewer"   → can request access to public/private projects; invited-only otherwise
-  - System "designer" → treated as "manager"; can self-join public projects
-  - System "admin"    → can self-join public or private projects; full control
+Access-request auto-approval rules:
+  - System "admin"    → always auto-approved as project admin on public/private projects
+  - System "designer" → auto-approved as project viewer on PUBLIC projects (explicit membership
+                        is created); requires manager approval on private projects
+  - System "viewer"   → always requires manager/admin approval on any project
 
-Hidden projects do not appear in any listing except to the bootstrap admin.
+All roles require an explicit membership row to have access — there is no implicit access.
+Hidden projects are invite-only; no access requests are accepted.
 """
 
 from __future__ import annotations
@@ -207,11 +209,16 @@ async def resolve_effective_project_role(
     """Return the effective project-role for a user, or None if no access.
 
     Rules (evaluated top-down, first match wins):
-    1. Bootstrap admin → always "admin"
-    2. System admin    → always "admin" (except hidden projects where only bootstrap admin applies)
-    3. Explicit membership row → return that role
-    4. Public project + system designer/admin → implicit "viewer" (no membership needed)
-    5. Otherwise → None (no access)
+    1. Bootstrap admin  → always "admin"
+    2. System admin     → always "admin" (except hidden projects)
+    3. Explicit approved membership row → return that role
+    4. Otherwise        → None (no access)
+
+    Note: designers are NOT implicitly granted access to public projects.
+    They must go through /request-access, which auto-approves them and
+    creates an explicit membership row.  The discover endpoint uses
+    project visibility (not this function) to decide whether the project
+    is *visible* to a designer in the listing.
     """
     email = user_email.strip().lower()
 
@@ -223,8 +230,6 @@ async def resolve_effective_project_role(
         membership = await get_membership(session, project_id, email)
         if membership:
             return membership.project_role
-        # System admins can also see hidden projects if they have membership,
-        # but without membership they cannot access hidden projects
         return None
 
     if system_role == "admin":
@@ -233,12 +238,6 @@ async def resolve_effective_project_role(
     membership = await get_membership(session, project_id, email)
     if membership:
         return membership.project_role
-
-    # Viewers must have an explicit membership for all projects —
-    # they are NOT automatically granted access even to public ones.
-    # Only designers/admins get implicit viewer access to public projects.
-    if visibility == "public" and system_role in ("designer", "admin"):
-        return "viewer"
 
     return None
 

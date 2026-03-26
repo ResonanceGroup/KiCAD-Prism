@@ -65,6 +65,10 @@ class AddMemberRequest(BaseModel):
     project_role: str = "viewer"
 
 
+class UpdateMemberRoleRequest(BaseModel):
+    project_role: str
+
+
 class AccessRequestResponse(BaseModel):
     id: str
     project_id: str
@@ -507,6 +511,43 @@ async def add_project_member(
     return _membership_to_response(membership)
 
 
+@router.patch("/{project_id}/members/{email}/role")
+async def update_member_role(
+    project_id: str,
+    email: str,
+    body: UpdateMemberRoleRequest,
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Promote or demote a project member's role.  Requires project manager or admin."""
+    project = _get_project_or_404(project_id)
+    await _assert_project_manager(session, project, user)
+
+    if body.project_role not in ("viewer", "manager", "admin"):
+        raise HTTPException(status_code=400, detail="project_role must be viewer, manager, or admin")
+
+    target_email = email.strip().lower()
+    existing = await project_acl_service.get_membership(session, project_id, target_email)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    # Prevent demoting yourself if you are the only admin
+    if target_email == user.email.strip().lower() and body.project_role != "admin":
+        all_members = await project_acl_service.list_members(session, project_id)
+        admin_count = sum(1 for m in all_members if m.project_role == "admin")
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Cannot demote yourself — you are the only admin on this project")
+
+    membership = await project_acl_service.upsert_membership(
+        session,
+        project_id=project_id,
+        user_email=target_email,
+        project_role=body.project_role,
+        added_by=user.email,
+    )
+    return _membership_to_response(membership)
+
+
 @router.delete("/{project_id}/members/{email}")
 async def remove_project_member(
     project_id: str,
@@ -592,28 +633,17 @@ async def self_join_project(
     user: AuthenticatedUser = Depends(require_viewer),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """System manager/admin can self-join public projects; system admin can also join private ones.
-    Viewers must request access instead.
+    """Kept for backwards compatibility. Redirects all callers to request-access.
+
+    Previously allowed designers to bypass the access-request flow on public
+    projects.  All users now go through request-access so that membership is
+    always tracked consistently.  Designers on public projects are
+    auto-approved; designers on private projects require manager approval.
     """
-    project = _get_project_or_404(project_id)
-
-    if project.visibility == VISIBILITY_HIDDEN:
-        raise HTTPException(status_code=403, detail="Hidden projects are invite-only")
-
-    if user.role not in ("designer", "admin"):
-        raise HTTPException(status_code=403, detail="Only managers and admins can self-join projects")
-
-    if project.visibility == VISIBILITY_PRIVATE and user.role != "admin":
-        raise HTTPException(status_code=403, detail="Managers must request access to private projects")
-
-    membership = await project_acl_service.upsert_membership(
-        session,
-        project_id=project_id,
-        user_email=user.email,
-        project_role="manager" if user.role == "designer" else "admin",
-        added_by=user.email,
+    raise HTTPException(
+        status_code=400,
+        detail="Use POST /request-access instead. Designers are auto-approved on public projects.",
     )
-    return _membership_to_response(membership)
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +658,17 @@ async def request_project_access(
     user: AuthenticatedUser = Depends(require_viewer),
     session: AsyncSession = Depends(get_async_session),
 ):
+    """
+    Request access to a project.
+
+    Auto-approval rules (no manager action needed):
+    - System admin      → always auto-approved as project admin
+    - System designer   → auto-approved as project viewer on PUBLIC projects only
+
+    Manual approval (project manager/admin must approve):
+    - System designer on PRIVATE projects
+    - System viewer on any project
+    """
     project = _get_project_or_404(project_id)
 
     if project.visibility == VISIBILITY_HIDDEN:
@@ -640,7 +681,7 @@ async def request_project_access(
     if body.requested_role not in ("viewer", "manager"):
         raise HTTPException(status_code=400, detail="requested_role must be viewer or manager")
 
-    # System admins are auto-approved with project-admin role
+    # --- System admin: always auto-approved as project admin ---
     if user.role == "admin":
         membership = await project_acl_service.upsert_membership(
             session,
@@ -660,6 +701,27 @@ async def request_project_access(
             "reviewed_at": datetime.utcnow().isoformat(),
         }
 
+    # --- System designer on a PUBLIC project: auto-approved as viewer ---
+    if user.role == "designer" and project.visibility == VISIBILITY_PUBLIC:
+        membership = await project_acl_service.upsert_membership(
+            session,
+            project_id=project_id,
+            user_email=user.email,
+            project_role="viewer",
+            added_by="system:auto_approved",
+        )
+        return {
+            "id": None,
+            "project_id": project_id,
+            "user_email": user.email,
+            "requested_role": "viewer",
+            "status": "auto_approved",
+            "requested_at": datetime.utcnow().isoformat(),
+            "reviewed_by": "system",
+            "reviewed_at": datetime.utcnow().isoformat(),
+        }
+
+    # --- All other cases: create a pending request and notify project managers ---
     req = await project_acl_service.create_access_request(
         session, project_id, user.email, body.requested_role
     )

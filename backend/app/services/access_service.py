@@ -121,11 +121,11 @@ def upsert_user_role(email: str, role: Role, updated_by: str) -> dict[str, str]:
     users[normalized_email] = {
         "role": role,
         "updated_at": _now_iso(),
-        "updated_by": _normalize_email(updated_by),
+        "updated_by": (updated_by or "").strip(),
     }
     payload["version"] = ROLE_STORE_VERSION
     payload["updated_at"] = _now_iso()
-    payload["updated_by"] = _normalize_email(updated_by)
+    payload["updated_by"] = (updated_by or "").strip()
     _save_role_store(payload)
 
     return {"email": normalized_email, "role": role, "source": "store"}

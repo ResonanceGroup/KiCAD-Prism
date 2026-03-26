@@ -11,9 +11,12 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api._helpers import get_project_for_role_or_404
-from app.core.security import AuthenticatedUser, require_designer, require_viewer
+from app.core.security import AuthenticatedUser, require_viewer
+from app.db.db import get_async_session
+from app.services import project_acl_service
 from app.services.comments_store_service import comments_store
 
 router = APIRouter(dependencies=[Depends(require_viewer)])
@@ -139,16 +142,22 @@ async def get_comments(project_id: str, user: AuthenticatedUser = Depends(requir
     return comments_store.get_comments_file(project.id, project.path)
 
 
-@router.post("/{project_id}/comments", dependencies=[Depends(require_designer)])
+@router.post("/{project_id}/comments")
 async def create_comment(
     project_id: str,
     request: CreateCommentRequest,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
-    Create a new comment on the design.
+    Create a new comment on the design.  Requires project manager or admin role.
     """
     project = get_project_for_role_or_404(project_id, user.role)
+    project_role = await project_acl_service.resolve_effective_project_role(
+        session, project.id, user.email, project.visibility, user.role
+    )
+    if project_role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Project manager or admin role required to add comments")
 
     context = _normalize_context(request.context)
     content = _normalize_content(request.content)
@@ -171,17 +180,23 @@ async def create_comment(
     return result
 
 
-@router.patch("/{project_id}/comments/{comment_id}", dependencies=[Depends(require_designer)])
+@router.patch("/{project_id}/comments/{comment_id}")
 async def update_comment(
     project_id: str,
     comment_id: str,
     request: UpdateCommentRequest,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
-    Update a comment's status (e.g., resolve it).
+    Update a comment's status (e.g., resolve it).  Requires project manager or admin role.
     """
     project = get_project_for_role_or_404(project_id, user.role)
+    project_role = await project_acl_service.resolve_effective_project_role(
+        session, project.id, user.email, project.visibility, user.role
+    )
+    if project_role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Project manager or admin role required to update comments")
 
     if request.status is None:
         raise HTTPException(status_code=400, detail="No update fields provided")
@@ -203,17 +218,23 @@ async def update_comment(
     return updated_comment
 
 
-@router.post("/{project_id}/comments/{comment_id}/replies", dependencies=[Depends(require_designer)])
+@router.post("/{project_id}/comments/{comment_id}/replies")
 async def add_reply(
     project_id: str,
     comment_id: str,
     request: CreateReplyRequest,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
-    Add a reply to an existing comment.
+    Add a reply to an existing comment.  Requires project manager or admin role.
     """
     project = get_project_for_role_or_404(project_id, user.role)
+    project_role = await project_acl_service.resolve_effective_project_role(
+        session, project.id, user.email, project.visibility, user.role
+    )
+    if project_role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Project manager or admin role required to add replies")
 
     result = comments_store.add_reply(
         project_id=project.id,
@@ -237,16 +258,22 @@ async def add_reply(
     return {"comment": comment, "reply": reply}
 
 
-@router.delete("/{project_id}/comments/{comment_id}", dependencies=[Depends(require_designer)])
+@router.delete("/{project_id}/comments/{comment_id}")
 async def delete_comment(
     project_id: str,
     comment_id: str,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
-    Delete a comment.
+    Delete a comment.  Requires project manager or admin role.
     """
     project = get_project_for_role_or_404(project_id, user.role)
+    project_role = await project_acl_service.resolve_effective_project_role(
+        session, project.id, user.email, project.visibility, user.role
+    )
+    if project_role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Project manager or admin role required to delete comments")
 
     deleted = comments_store.delete_comment(
         project_id=project.id,
@@ -264,13 +291,22 @@ async def delete_comment(
 # EXPORT ENDPOINT
 # ============================================================
 
-@router.post("/{project_id}/comments/push", dependencies=[Depends(require_designer)])
-async def push_comments(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+@router.post("/{project_id}/comments/push")
+async def push_comments(
+    project_id: str,
+    user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
+):
     """
-    Export DB snapshot to comments.json artifact only.
+    Export DB snapshot to comments.json artifact only.  Requires project manager or admin.
     Git commit/push is intentionally left to the user workflow.
     """
     project = get_project_for_role_or_404(project_id, user.role)
+    project_role = await project_acl_service.resolve_effective_project_role(
+        session, project.id, user.email, project.visibility, user.role
+    )
+    if project_role not in ("manager", "admin"):
+        raise HTTPException(status_code=403, detail="Project manager or admin role required")
 
     try:
         comments_path = comments_store.export_comments_json(project.id, project.path)

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.comments import router as comments_router
@@ -156,6 +157,70 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="KiCAD Prism API", lifespan=lifespan)
 
+# ---------------------------------------------------------------------------
+# GitHub OAuth callback redirect middleware
+# ---------------------------------------------------------------------------
+# fastapi-users with CookieTransport returns 204 (cookie set, no body) after
+# a successful GitHub OAuth callback.  This middleware converts that 204 into a
+# 302 redirect to APP_URL so the browser lands on the SPA home page.
+# All response headers (including Set-Cookie) are preserved on the redirect.
+# A 403 (user has no RBAC role yet) redirects to APP_URL?login_error=access_denied
+# so the frontend can show a friendly "pending approval" message.
+# ---------------------------------------------------------------------------
+if settings.APP_URL:
+    _oauth_success_url = (settings.APP_URL.rstrip("/") + "/").encode()
+    _oauth_denied_url = (settings.APP_URL.rstrip("/") + "/?login_error=access_denied").encode()
+
+    class _OAuthCallbackRedirectMiddleware:
+        _PATH = "/api/auth/github/callback"
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if not (scope["type"] == "http" and scope.get("path") == self._PATH):
+                await self.app(scope, receive, send)
+                return
+
+            captured_status: list = []
+
+            async def capture_send(message):
+                if message["type"] == "http.response.start":
+                    status = message["status"]
+                    captured_status.append(status)
+                    if status == 204:
+                        # Successful auth — redirect, preserving all cookies.
+                        await send({
+                            "type": "http.response.start",
+                            "status": 302,
+                            "headers": list(message.get("headers", [])) + [
+                                (b"location", _oauth_success_url),
+                            ],
+                        })
+                    elif status == 403:
+                        # No RBAC role — redirect to login error page.
+                        await send({
+                            "type": "http.response.start",
+                            "status": 302,
+                            "headers": [(b"location", _oauth_denied_url)],
+                        })
+                    else:
+                        await send(message)
+                elif message["type"] == "http.response.body":
+                    if captured_status and captured_status[0] in (204, 403):
+                        await send({"type": "http.response.body", "body": b"", "more_body": False})
+                    else:
+                        await send(message)
+                else:
+                    await send(message)
+
+            await self.app(scope, receive, capture_send)
+
+    app.add_middleware(_OAuthCallbackRedirectMiddleware)
+
+# Trust proxy headers for real client IP forwarding.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
 # Configure CORS
 # ---------------------------------------------------------------------------
 # Entry point when run directly: python -m app.main
@@ -222,11 +287,19 @@ app.include_router(
 # ---------------------------------------------------------------------------
 # fastapi-users: GitHub OAuth router
 # ---------------------------------------------------------------------------
+# redirect_url is hardwired from APP_URL so the callback URI sent to GitHub
+# is always the public hostname — never the internal 127.0.0.1 address.
+_github_callback_url = (
+    f"{settings.APP_URL.rstrip('/')}/api/auth/github/callback"
+    if settings.APP_URL
+    else None
+)
 app.include_router(
     fastapi_users_instance.get_oauth_router(
         github_oauth_client,
         auth_backend,
         settings.SESSION_SECRET,
+        redirect_url=_github_callback_url,
         associate_by_email=True,
         is_verified_by_default=True,
     ),

@@ -25,9 +25,11 @@ DEFAULT_PATHS = {
     "documentation": "docs",
     "thumbnail": "assets/thumbnail",
     "readme": "README.md",
-    "jobset": "Outputs.kicad_jobset"
+    "jobset": "Outputs.kicad_jobset",
+    "model3d": None,
+    "bom": None,
 }
-PATH_FIELDS = list(DEFAULT_PATHS.keys())
+PATH_FIELDS = [k for k, v in DEFAULT_PATHS.items()]
 
 # Common patterns for auto-detection
 DETECTION_PATTERNS = {
@@ -97,6 +99,8 @@ class PathConfig(BaseModel):
     thumbnail: Optional[str] = None
     readme: Optional[str] = None
     jobset: Optional[str] = None
+    model3d: Optional[str] = None
+    bom: Optional[str] = None
     project_name: Optional[str] = None
     description: Optional[str] = None
     workflows: Optional[List[Any]] = None
@@ -118,6 +122,8 @@ class ResolvedPaths(BaseModel):
     thumbnail_dir: Optional[str] = None
     readme_path: Optional[str] = None
     jobset_path: Optional[str] = None
+    model3d_path: Optional[str] = None
+    bom_path: Optional[str] = None
 
 
 # Cache for project configurations
@@ -221,32 +227,57 @@ def _find_directory_by_keywords(directory: Path, keywords: List[str], required_c
     return None
 
 
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".tox", ".venv", "venv"}
+
+
+def _best_match(candidates: List[Path], project_dir: Path, project_name: str) -> Optional[str]:
+    """Return the best-matching file path as a POSIX-style relative path."""
+    if not candidates:
+        return None
+    # Sort by depth (shallowest first)
+    candidates = sorted(candidates, key=lambda p: len(p.relative_to(project_dir).parts))
+    # Prefer a stem that matches or contains the project name
+    name_lower = project_name.lower()
+    for c in candidates:
+        stem = c.stem.lower()
+        if stem == name_lower or name_lower in stem:
+            return c.relative_to(project_dir).as_posix()
+    return candidates[0].relative_to(project_dir).as_posix()
+
+
+def _rglob_skip_hidden(project_dir: Path, pattern: str, max_depth: int = 5) -> List[Path]:
+    """Glob recursively but skip hidden directories and known non-project dirs."""
+    results = []
+    for p in project_dir.rglob(pattern):
+        rel_parts = p.relative_to(project_dir).parts
+        if len(rel_parts) > max_depth:
+            continue
+        if any(part.startswith(".") or part in _SKIP_DIRS for part in rel_parts):
+            continue
+        results.append(p)
+    return results
+
+
 def _detect_schematic_path(project_path: Path) -> Optional[str]:
-    """Detect main schematic file path."""
-    # Look for .kicad_sch files in root
-    sch_files = list(project_path.glob("*.kicad_sch"))
-    if sch_files:
-        # Prefer one matching project directory name, otherwise first found
-        project_name = project_path.name
-        for sch in sch_files:
-            if sch.stem.lower() == project_name.lower():
-                return sch.name
-        return sch_files[0].name
-    return None
+    """Detect main schematic file path (root first, then recursive)."""
+    project_name = project_path.name
+    # Root-level search first
+    root_matches = [f for f in project_path.glob("*.kicad_sch") if not f.name.startswith(".")]
+    if root_matches:
+        return _best_match(root_matches, project_path, project_name)
+    # Recursive fallback
+    deep_matches = _rglob_skip_hidden(project_path, "*.kicad_sch")
+    return _best_match(deep_matches, project_path, project_name)
 
 
 def _detect_pcb_path(project_path: Path) -> Optional[str]:
-    """Detect main PCB file path."""
-    # Look for .kicad_pcb files in root
-    pcb_files = list(project_path.glob("*.kicad_pcb"))
-    if pcb_files:
-        # Prefer one matching project directory name, otherwise first found
-        project_name = project_path.name
-        for pcb in pcb_files:
-            if pcb.stem.lower() == project_name.lower():
-                return pcb.name
-        return pcb_files[0].name
-    return None
+    """Detect main PCB file path (root first, then recursive)."""
+    project_name = project_path.name
+    root_matches = [f for f in project_path.glob("*.kicad_pcb") if not f.name.startswith(".")]
+    if root_matches:
+        return _best_match(root_matches, project_path, project_name)
+    deep_matches = _rglob_skip_hidden(project_path, "*.kicad_pcb")
+    return _best_match(deep_matches, project_path, project_name)
 
 
 def _detect_subsheets_path(project_path: Path) -> Optional[str]:
@@ -332,6 +363,24 @@ def _detect_jobset_path(project_path: Path) -> Optional[str]:
     return None
 
 
+def _detect_model3d_path(project_path: Path) -> Optional[str]:
+    """Detect 3D model file path."""
+    for ext in (".glb", ".step", ".stp"):
+        matches = _rglob_skip_hidden(project_path, f"*{ext}")
+        if matches:
+            return matches[0].relative_to(project_path).as_posix()
+    return None
+
+
+def _detect_bom_path(project_path: Path) -> Optional[str]:
+    """Detect BOM (interactive HTML BOM) file path."""
+    for p in _rglob_skip_hidden(project_path, "*.html"):
+        name_lower = p.stem.lower()
+        if "bom" in name_lower or "ibom" in name_lower:
+            return p.relative_to(project_path).as_posix()
+    return None
+
+
 PATH_DETECTORS = {
     "schematic": _detect_schematic_path,
     "pcb": _detect_pcb_path,
@@ -342,6 +391,8 @@ PATH_DETECTORS = {
     "thumbnail": _detect_thumbnail_path,
     "readme": _detect_readme_path,
     "jobset": _detect_jobset_path,
+    "model3d": _detect_model3d_path,
+    "bom": _detect_bom_path,
 }
 
 
@@ -366,7 +417,9 @@ def detect_paths(project_path: str) -> PathConfig:
         documentation=_detect_documentation_path(project_dir),
         thumbnail=_detect_thumbnail_path(project_dir),
         readme=_detect_readme_path(project_dir),
-        jobset=_detect_jobset_path(project_dir)
+        jobset=_detect_jobset_path(project_dir),
+        model3d=_detect_model3d_path(project_dir),
+        bom=_detect_bom_path(project_dir),
     )
 
 
@@ -402,7 +455,7 @@ def get_path_config(project_path: str, use_cache: bool = True) -> PathConfig:
             detected_value = PATH_DETECTORS[key](project_dir)
             if detected_value is not None:
                 merged_dict[key] = detected_value
-            elif key != "subsheets":
+            elif DEFAULT_PATHS.get(key) is not None and key not in ("subsheets", "model3d", "bom"):
                 merged_dict[key] = DEFAULT_PATHS[key]
 
     merged = PathConfig(**merged_dict)
@@ -435,25 +488,26 @@ def resolve_paths(project_path: str, config: Optional[PathConfig] = None) -> Res
         resolved = project_dir / path
         return str(resolved) if resolved.exists() else None
     
-    # Handle glob patterns for schematic and pcb
-    schematic_path = None
-    if config.schematic:
-        if '*' in config.schematic:
-            matches = list(project_dir.glob(config.schematic))
-            if matches:
-                schematic_path = str(matches[0])
-        else:
-            schematic_path = resolve_path(config.schematic)
-    
-    pcb_path = None
-    if config.pcb:
-        if '*' in config.pcb:
-            matches = list(project_dir.glob(config.pcb))
-            if matches:
-                pcb_path = str(matches[0])
-        else:
-            pcb_path = resolve_path(config.pcb)
-    
+    def resolve_glob(pattern: str) -> Optional[str]:
+        """Resolve a glob or path expression to an existing absolute path."""
+        if '*' not in pattern:
+            return resolve_path(pattern)
+        # Try root-level glob first, then recursive
+        matches = list(project_dir.glob(pattern))
+        if not matches:
+            matches = _rglob_skip_hidden(project_dir, pattern)
+        if not matches:
+            return None
+        project_name = project_dir.name
+        matches = sorted(matches, key=lambda p: len(p.parts))
+        preferred = [m for m in matches
+                     if m.stem.lower() == project_name.lower() or project_name.lower() in m.stem.lower()]
+        chosen = preferred[0] if preferred else matches[0]
+        return str(chosen) if chosen.exists() else None
+
+    schematic_path = resolve_glob(config.schematic) if config.schematic else None
+    pcb_path = resolve_glob(config.pcb) if config.pcb else None
+
     return ResolvedPaths(
         project_root=str(project_dir),
         schematic=schematic_path,
@@ -464,7 +518,9 @@ def resolve_paths(project_path: str, config: Optional[PathConfig] = None) -> Res
         documentation_dir=resolve_path(config.documentation),
         thumbnail_dir=resolve_path(config.thumbnail),
         readme_path=resolve_path(config.readme),
-        jobset_path=resolve_path(config.jobset)
+        jobset_path=resolve_path(config.jobset),
+        model3d_path=resolve_glob(config.model3d) if config.model3d else None,
+        bom_path=resolve_glob(config.bom) if config.bom else None,
     )
 
 

@@ -15,12 +15,17 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
+import {
     Tooltip,
     TooltipContent,
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Settings, RefreshCw, Check, AlertCircle, FileSearch } from "lucide-react";
+import { Settings, RefreshCw, Check, AlertCircle, FileSearch, FolderOpen } from "lucide-react";
 
 interface PathConfig {
     schematic?: string;
@@ -32,6 +37,8 @@ interface PathConfig {
     thumbnail?: string;
     readme?: string;
     jobset?: string;
+    model3d?: string;
+    bom?: string;
     project_name?: string;
     description?: string;
     workflows?: unknown[];
@@ -86,6 +93,14 @@ const PATH_LABELS: Record<string, { label: string; description: string }> = {
         label: "Jobset File",
         description: "KiCAD jobset file for workflows (e.g., Outputs.kicad_jobset)",
     },
+    model3d: {
+        label: "3D Model",
+        description: "3D model file for the PCB (e.g., Design-Outputs/3DModel/board.glb)",
+    },
+    bom: {
+        label: "Bill of Materials",
+        description: "Interactive BOM HTML file (e.g., Design-Outputs/ibom.html)",
+    },
 };
 
 export function PathConfigDialog({ projectId, open, onOpenChange }: PathConfigDialogProps) {
@@ -97,6 +112,54 @@ export function PathConfigDialog({ projectId, open, onOpenChange }: PathConfigDi
     const [source, setSource] = useState<string>("auto-detected");
     const [saving, setSaving] = useState(false);
     const [detecting, setDetecting] = useState(false);
+    const [fileTree, setFileTree] = useState<{ files: string[]; dirs: string[] } | null>(null);
+    const [fetchingTree, setFetchingTree] = useState(false);
+    const [openBrowseKey, setOpenBrowseKey] = useState<string | null>(null);
+
+    const FIELD_FILTERS: Record<string, { exts?: string[]; dirs?: boolean }> = {
+        schematic: { exts: [".kicad_sch"] },
+        pcb: { exts: [".kicad_pcb"] },
+        subsheets: { dirs: true },
+        designOutputs: { dirs: true },
+        manufacturingOutputs: { dirs: true },
+        documentation: { dirs: true },
+        thumbnail: { exts: [".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif"] },
+        readme: { exts: [".md"] },
+        jobset: { exts: [".kicad_jobset"] },
+        model3d: { exts: [".glb", ".step", ".stp"] },
+        bom: { exts: [".html"] },
+    };
+
+    const getOptionsForField = (key: string): string[] => {
+        if (!fileTree) return [];
+        const filter = FIELD_FILTERS[key];
+        if (!filter) return [...fileTree.files, ...fileTree.dirs].sort();
+        const results: string[] = [];
+        if (filter.dirs) results.push(...fileTree.dirs);
+        if (filter.exts) {
+            results.push(
+                ...fileTree.files.filter((f) =>
+                    filter.exts!.some((ext) => f.toLowerCase().endsWith(ext))
+                )
+            );
+        }
+        return results.sort();
+    };
+
+    const fetchFileTree = async () => {
+        if (fileTree) return;
+        setFetchingTree(true);
+        try {
+            const response = await fetch(`/api/projects/${projectId}/filetree`);
+            if (response.ok) {
+                setFileTree(await response.json());
+            }
+        } catch (err) {
+            console.error("Failed to fetch file tree:", err);
+        } finally {
+            setFetchingTree(false);
+        }
+    };
 
     const formatWorkflows = useCallback(
         (workflows?: unknown[]) => JSON.stringify(Array.isArray(workflows) ? workflows : [], null, 2),
@@ -220,6 +283,9 @@ export function PathConfigDialog({ projectId, open, onOpenChange }: PathConfigDi
             const controller = new AbortController();
             fetchConfig(controller.signal);
             return () => controller.abort();
+        } else {
+            setFileTree(null);
+            setOpenBrowseKey(null);
         }
     }, [open, fetchConfig]);
 
@@ -380,13 +446,69 @@ export function PathConfigDialog({ projectId, open, onOpenChange }: PathConfigDi
                                         </Tooltip>
                                     </TooltipProvider>
                                 </div>
-                                <Input
-                                    id={key}
-                                    value={(config[key as keyof PathConfig] as string) || ""}
-                                    onChange={(e) => handleChange(key as keyof PathConfig, e.target.value)}
-                                    placeholder={description}
-                                    className="h-8"
-                                />
+                                <div className="flex gap-2">
+                                    <Input
+                                        id={key}
+                                        value={(config[key as keyof PathConfig] as string) || ""}
+                                        onChange={(e) => handleChange(key as keyof PathConfig, e.target.value)}
+                                        placeholder={description}
+                                        className="h-8"
+                                    />
+                                    <Popover
+                                        open={openBrowseKey === key}
+                                        onOpenChange={(o) => setOpenBrowseKey(o ? key : null)}
+                                    >
+                                        <PopoverTrigger asChild>
+                                            <Button
+                                                variant="outline"
+                                                size="icon"
+                                                className="h-8 w-8 shrink-0"
+                                                onClick={() => {
+                                                    fetchFileTree();
+                                                    setOpenBrowseKey(openBrowseKey === key ? null : key);
+                                                }}
+                                                title="Browse project files"
+                                            >
+                                                <FolderOpen className="h-4 w-4" />
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-80 p-0" align="end">
+                                            <div className="text-xs font-medium text-muted-foreground px-3 pt-2 pb-1">
+                                                {FIELD_FILTERS[key]?.dirs && !FIELD_FILTERS[key]?.exts
+                                                    ? "Select a folder"
+                                                    : `Select a file (${(FIELD_FILTERS[key]?.exts ?? []).join(", ")})`}
+                                            </div>
+                                            <Separator />
+                                            <ScrollArea className="h-52">
+                                                {fetchingTree ? (
+                                                    <p className="text-sm text-muted-foreground text-center py-6">
+                                                        Loading…
+                                                    </p>
+                                                ) : getOptionsForField(key).length === 0 ? (
+                                                    <p className="text-sm text-muted-foreground text-center py-6">
+                                                        No matching files found
+                                                    </p>
+                                                ) : (
+                                                    <div className="py-1">
+                                                        {getOptionsForField(key).map((opt) => (
+                                                            <button
+                                                                key={opt}
+                                                                className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent truncate block"
+                                                                title={opt}
+                                                                onClick={() => {
+                                                                    handleChange(key as keyof PathConfig, opt);
+                                                                    setOpenBrowseKey(null);
+                                                                }}
+                                                            >
+                                                                {opt}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </ScrollArea>
+                                        </PopoverContent>
+                                    </Popover>
+                                </div>
                                 {resolvedPaths[key] && (
                                     <p className="text-xs text-muted-foreground truncate">
                                         Resolved: {getResolvedPath(key)}

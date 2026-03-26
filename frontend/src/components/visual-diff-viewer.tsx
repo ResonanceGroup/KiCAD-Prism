@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Loader2, AlertCircle, Eye, ZoomIn, ZoomOut, RotateCcw, CircuitBoard, Cpu, ClipboardList } from "lucide-react";
+import { X, Loader2, AlertCircle, Eye, ZoomIn, ZoomOut, RotateCcw, CircuitBoard, Cpu, ClipboardList, GitCompare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
@@ -10,6 +10,7 @@ interface VisualDiffViewerProps {
     commit1: string;  // Newer commit
     commit2: string;  // Older commit
     onClose: () => void;
+    onChangeCommits?: () => void;
 }
 
 interface DiffJobStatus {
@@ -41,7 +42,7 @@ interface DiffManifest {
     } | null;
 }
 
-export function VisualDiffViewer({ projectId, commit1, commit2, onClose }: VisualDiffViewerProps) {
+export function VisualDiffViewer({ projectId, commit1, commit2, onClose, onChangeCommits }: VisualDiffViewerProps) {
     const [jobId, setJobId] = useState<string | null>(null);
     const [status, setStatus] = useState<DiffJobStatus | null>(null);
     const [manifest, setManifest] = useState<DiffManifest | null>(null);
@@ -335,7 +336,15 @@ return (
 <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded border border-green-200">{commit1.slice(0, 7)} (New)</span>
 </div>
 </div>
+<div className="flex items-center gap-1">
+{onChangeCommits && (
+    <Button variant="outline" size="sm" onClick={onChangeCommits} className="text-xs h-8">
+        <GitCompare className="h-3.5 w-3.5 mr-1.5" />
+        Change Commits
+    </Button>
+)}
 <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+</div>
 </div>
 
 {manifest ? (

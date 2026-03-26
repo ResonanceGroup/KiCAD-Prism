@@ -4,7 +4,7 @@ services:
     container_name: kicad-prism-backend
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
     volumes:
       # Mount projects directory for persistence
       - ./data/projects:/app/projects
@@ -49,5 +49,7 @@ services:
     restart: unless-stopped
     ports:
       - "8080:80"
+    environment:
+      - BACKEND_PORT=${BACKEND_PORT:-8000}
     depends_on:
       - backend

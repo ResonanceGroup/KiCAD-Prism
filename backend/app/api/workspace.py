@@ -40,14 +40,12 @@ async def get_workspace_bootstrap(
                 accessible.append(p)
         projects = accessible
     elif user.role == "designer":
-        # Designers see public projects freely; private projects only if they have membership.
+        # Designers only see projects where they have explicit membership.
+        # Public projects appear in the Discover tab; they must request access first.
         accessible = []
         for p in all_projects:
-            if p.visibility == "private":
-                m = await project_acl_service.get_membership(session, p.id, user.email)
-                if m:
-                    accessible.append(p)
-            else:
+            m = await project_acl_service.get_membership(session, p.id, user.email)
+            if m:
                 accessible.append(p)
         projects = accessible
     else:

@@ -292,3 +292,124 @@ def extract_pcb_metadata(project_path: str, file_path: Optional[str]) -> Optiona
             "title_block": _parse_title_block(text),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# BOM generation from .kicad_sch files
+# ---------------------------------------------------------------------------
+
+_BOM_SKIP_FIELDS = frozenset({
+    "ki_fp_filters", "ki_locked", "ki_keywords",
+    "ki_description", "ki_description_text",
+})
+
+
+def _natural_sort_key(s: str) -> list:
+    """Split a string into alternating text/numeric segments for natural sort."""
+    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", s)]
+
+
+def parse_bom_from_schematic(text: str) -> list[dict]:
+    """
+    Extract component instances from KiCAD schematic text.
+
+    Returns a list of property dicts with at minimum ``Reference``, ``Value``,
+    ``Footprint``, ``Datasheet``, and ``Description`` keys plus any custom fields.
+    Power / virtual symbols (``in_bom no``, or references starting with ``#``)
+    are excluded.
+    """
+    # Skip the lib_symbols block – it contains symbol *definitions*, not instances.
+    lib_symbols_end = 0
+    lib_start = text.find("(lib_symbols")
+    if lib_start != -1:
+        lib_block = _extract_sexpr_block(text[lib_start:], "lib_symbols")
+        if lib_block:
+            lib_symbols_end = lib_start + len(lib_block)
+
+    components: list[dict] = []
+    search_text = text[lib_symbols_end:]
+
+    for block in _extract_sexpr_blocks(search_text, "symbol"):
+        if "(in_bom yes)" not in block:
+            continue
+
+        props: dict[str, str] = {}
+        for prop_block in _extract_sexpr_blocks(block, "property"):
+            m = re.match(
+                r"\(property\s+" + _STRING_PATTERN + r"\s+" + _STRING_PATTERN,
+                prop_block,
+            )
+            if m:
+                key = _unescape_kicad_string(m.group(1))
+                val = _unescape_kicad_string(m.group(2))
+                props[key] = val
+
+        ref = props.get("Reference", "")
+        # Exclude virtual / power flags whose reference starts with '#'
+        if not ref or ref.startswith("#"):
+            continue
+
+        components.append(props)
+
+    return components
+
+
+def build_bom(components: list[dict]) -> list[dict]:
+    """
+    Group components by Value and return sorted BOM rows.
+
+    Each row contains:
+    ``value``, ``quantity``, ``references``, ``footprints``, ``datasheet``,
+    ``description``, ``extra_fields``.
+    Rows are sorted by natural order of their first reference designator.
+    """
+    groups: dict[str, list[dict]] = {}
+    for comp in components:
+        key = comp.get("Value", "").lower()
+        groups.setdefault(key, []).append(comp)
+
+    rows: list[dict] = []
+    for comps in groups.values():
+        refs = sorted(
+            (c.get("Reference", "") for c in comps),
+            key=_natural_sort_key,
+        )
+
+        # Unique footprints preserving first-appearance order
+        footprints: list[str] = []
+        seen_fps: set[str] = set()
+        for c in comps:
+            fp = c.get("Footprint", "").strip()
+            if fp and fp not in seen_fps:
+                footprints.append(fp)
+                seen_fps.add(fp)
+
+        first = comps[0]
+        datasheet = first.get("Datasheet", "")
+        if datasheet in ("~", ""):
+            datasheet = ""
+
+        # Collect extra / custom fields, skipping internal KiCAD keys
+        extra: dict[str, str] = {}
+        for c in comps:
+            for k, v in c.items():
+                if k in ("Reference", "Value", "Footprint", "Datasheet", "Description"):
+                    continue
+                if k.startswith("ki_") or k in _BOM_SKIP_FIELDS:
+                    continue
+                v = v.strip()
+                if v and k not in extra:
+                    extra[k] = v
+
+        rows.append({
+            "value": first.get("Value", ""),
+            "quantity": len(refs),
+            "references": refs,
+            "footprints": footprints,
+            "datasheet": datasheet,
+            "description": first.get("Description", ""),
+            "extra_fields": extra,
+        })
+
+    rows.sort(key=lambda r: _natural_sort_key(r["references"][0]) if r["references"] else [])
+    return rows

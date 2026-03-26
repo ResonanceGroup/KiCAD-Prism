@@ -770,6 +770,10 @@ def find_3d_model(project_path: str) -> Optional[str]:
     """Find the .glb or .step model using path config."""
     resolved = path_config_service.resolve_paths(project_path)
     
+    # Check explicit config path first
+    if resolved.model3d_path and os.path.exists(resolved.model3d_path):
+        return resolved.model3d_path
+    
     # Check Design-Outputs/3DModel subdirectory
     if resolved.design_outputs_dir:
         model_dir = os.path.join(resolved.design_outputs_dir, "3DModel")
@@ -790,6 +794,10 @@ def find_ibom_file(project_path: str) -> Optional[str]:
     """Find the iBoM HTML file using path config."""
     resolved = path_config_service.resolve_paths(project_path)
     
+    # Check explicit config path first
+    if resolved.bom_path and os.path.exists(resolved.bom_path):
+        return resolved.bom_path
+
     if not resolved.design_outputs_dir or not os.path.exists(resolved.design_outputs_dir):
         return None
     

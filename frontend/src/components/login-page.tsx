@@ -139,11 +139,17 @@ export function LoginPage({
     }
   };
 
-  const handleGitHubSignIn = () => {
-    // Pass the current origin as the redirect_url so fastapi-users returns
-    // the user to the SPA after the OAuth callback completes.
+  const handleGitHubSignIn = async () => {
+    // fastapi-users v13+ returns JSON {authorization_url: "..."} — fetch it
+    // then redirect the browser to GitHub for authorization.
     const redirectUrl = encodeURIComponent(window.location.origin + "/");
-    window.location.href = `/api/auth/github/authorize?redirect_url=${redirectUrl}`;
+    try {
+      const res = await fetch(`/api/auth/github/authorize?redirect_url=${redirectUrl}`);
+      const data = await res.json();
+      window.location.href = data.authorization_url;
+    } catch {
+      setError("Failed to start GitHub sign-in. Please try again.");
+    }
   };
 
   const handleEmailSignIn = async (e: React.FormEvent) => {
