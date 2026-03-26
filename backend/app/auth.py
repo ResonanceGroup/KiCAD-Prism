@@ -396,6 +396,7 @@ auth_backend = AuthenticationBackend(
 github_oauth_client = GitHubOAuth2(
     client_id=settings.GITHUB_CLIENT_ID,
     client_secret=settings.GITHUB_CLIENT_SECRET,
+    scopes=[s.strip() for s in settings.GITHUB_SCOPES.split(",") if s.strip()],
 )
 
 

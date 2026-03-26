@@ -125,10 +125,16 @@ class Settings(BaseSettings):
         description="GitHub organization slug; must match the org that owns the OAuth App (e.g. 'yourcompanyorg')."
     )
 
-    # OAuth scopes requested from GitHub.
+    # OAuth scopes requested from GitHub during user sign-in.
+    # read:org  – verify org membership via /orgs/{org}/members/{username}
+    # user:email – retrieve the user's email address from /user/emails
+    # The 'repo' scope is NOT required; all repository operations use the GitHub App.
     GITHUB_SCOPES: str = Field(
-        default="repo,read:org",
-        description="Comma-separated GitHub OAuth scopes (e.g. 'repo,read:org')."
+        default="read:org,user:email",
+        description=(
+            "Comma-separated GitHub OAuth scopes for user sign-in identity verification. "
+            "Repo access is handled by the GitHub App and does not require 'repo' scope here."
+        ),
     )
 
     # ===========================================
