@@ -5,6 +5,7 @@ export interface User {
     email: string;
     picture?: string;
     role: UserRole;
+    github_connected?: boolean;
 }
 
 export interface AuthConfig {
@@ -14,4 +15,5 @@ export interface AuthConfig {
     github_client_id: string;
     workspace_name: string;
     providers: string[];
+    github_app_configured: boolean;
 }

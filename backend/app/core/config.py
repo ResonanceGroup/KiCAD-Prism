@@ -176,6 +176,44 @@ class Settings(BaseSettings):
     )
 
     # ===========================================
+    # GitHub App (for server-side repo operations)
+    # ===========================================
+    # The GitHub App is used for all repo browsing, cloning, and webhook
+    # processing.  It operates independently of any user's OAuth session.
+
+    GITHUB_APP_ID: str = Field(
+        default="",
+        description="Numeric GitHub App ID (shown on the App settings page).",
+    )
+
+    GITHUB_APP_PRIVATE_KEY: str = Field(
+        default="",
+        description=(
+            "GitHub App RSA private key.  Three accepted formats:\n"
+            "  1. Base64-encoded PEM (recommended):  base64 -w 0 private-key.pem\n"
+            "  2. Raw PEM with escaped newlines:      -----BEGIN RSA PRIVATE KEY-----\\n...\n"
+            "  3. Absolute path to a .pem file:       /run/secrets/github-app.pem"
+        ),
+    )
+
+    GITHUB_APP_INSTALLATION_ID: str = Field(
+        default="",
+        description=(
+            "GitHub App installation ID for the target organization. "
+            "Find it at /orgs/{org}/installations or the GitHub App's Installations page."
+        ),
+    )
+
+    GITHUB_WEBHOOK_SECRET: str = Field(
+        default="",
+        description=(
+            "Webhook secret used to verify HMAC-SHA256 signatures on incoming "
+            "GitHub App events.  Must match the secret set in the GitHub App's "
+            "webhook settings."
+        ),
+    )
+
+    # ===========================================
     # Git & GitHub Integration
     # ===========================================
     GITHUB_TOKEN: str = Field(

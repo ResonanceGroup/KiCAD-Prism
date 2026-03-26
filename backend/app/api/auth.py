@@ -18,8 +18,8 @@ from app.core.config import settings
 from app.core.roles import Role
 from app.core.security import AuthenticatedUser, get_current_user, guest_user
 from app.core.session import clear_session_cookie, create_session_token, set_session_cookie
-from app.db.db import async_session_maker
-from app.db.models import ProjectMembership
+from app.db.db import async_session_maker, get_async_session
+from app.db.models import OAuthAccount, ProjectMembership, User as UserModel
 from app.services import access_service
 
 router = APIRouter()
@@ -43,6 +43,7 @@ class UserSession(BaseModel):
     name: str
     picture: str = ""
     role: Role
+    github_connected: bool = False
 
 
 class AuthConfig(BaseModel):
@@ -53,6 +54,7 @@ class AuthConfig(BaseModel):
     github_client_id: str
     workspace_name: str
     providers: list[str]
+    github_app_configured: bool
 
 
 def _guest_user_session() -> UserSession:
@@ -110,6 +112,11 @@ async def get_auth_config():
         github_client_id=settings.GITHUB_CLIENT_ID,
         workspace_name=settings.WORKSPACE_NAME,
         providers=providers,
+        github_app_configured=bool(
+            settings.GITHUB_APP_ID
+            and settings.GITHUB_APP_PRIVATE_KEY
+            and settings.GITHUB_APP_INSTALLATION_ID
+        ),
     )
 
 
@@ -178,12 +185,32 @@ async def login(request: TokenRequest, response: Response):
 
 
 @router.get("/me", response_model=UserSession)
-async def get_current_session_user(user: AuthenticatedUser = Depends(get_current_user)):
+async def get_current_session_user(
+    user: AuthenticatedUser = Depends(get_current_user),
+    session=Depends(get_async_session),
+):
+    """Return the current user's session info, including GitHub connection status."""
+    # Check whether the user has a linked GitHub OAuth account in the database
+    github_connected = False
+    try:
+        result = await session.execute(
+            select(OAuthAccount)
+            .join(UserModel, OAuthAccount.user_id == UserModel.id)
+            .where(
+                UserModel.email == user.email.lower(),
+                OAuthAccount.oauth_name == "github",
+            )
+        )
+        github_connected = result.scalar_one_or_none() is not None
+    except Exception:
+        pass  # Non-fatal — fall back to github_connected=False
+
     return UserSession(
         email=user.email,
         name=user.name,
         picture=user.picture,
         role=user.role,
+        github_connected=github_connected,
     )
 
 

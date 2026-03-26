@@ -12,6 +12,7 @@ from app.api.comments import router as comments_router
 from app.api.diff import router as diff_router
 from app.api.folders import router as folders_router
 from app.api.github_repos import router as github_repos_router
+from app.api.github_webhook import router as github_webhook_router
 from app.api.project_acl import router as project_acl_router
 from app.api.projects import router as projects_router
 from app.api.settings import router as settings_router
@@ -185,6 +186,7 @@ app.add_middleware(
 # GET /{project_id} wildcard in projects_router swallows them.
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(github_repos_router, prefix="/api/github", tags=["github"])
+app.include_router(github_webhook_router, prefix="/api/github", tags=["github"])
 app.include_router(project_acl_router, prefix="/api/projects", tags=["project-acl"])
 app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
 app.include_router(comments_router, prefix="/api/projects", tags=["comments"])
