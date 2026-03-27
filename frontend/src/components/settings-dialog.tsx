@@ -559,7 +559,21 @@ function UsersSettings() {
                 setDeleteTarget(null);
                 void load();
             } else {
-                toast.error(await readApiError(res, "Failed to delete user"));
+                if (res.status === 409) {
+                    try {
+                        const payload = (await res.json()) as { detail?: { message?: string; sole_admin_projects?: string[] } };
+                        let errorMessage = payload.detail?.message ?? "Failed to delete user";
+                        const projects = payload.detail?.sole_admin_projects;
+                        if (projects && projects.length > 0) {
+                            errorMessage += ` Projects: ${projects.join(", ")}`;
+                        }
+                        toast.error(errorMessage);
+                    } catch {
+                        toast.error("Failed to delete user: unable to parse error details");
+                    }
+                } else {
+                    toast.error(await readApiError(res, "Failed to delete user"));
+                }
             }
         } finally {
             setDeleting(false);
