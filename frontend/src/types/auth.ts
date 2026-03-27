@@ -10,6 +10,7 @@ export interface User {
     notification_email?: string | null;
     has_password?: boolean;
     github_username?: string | null;
+    github_email?: string | null;
 }
 
 export interface AuthConfig {

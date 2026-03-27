@@ -209,31 +209,16 @@ async def resolve_effective_project_role(
     """Return the effective project-role for a user, or None if no access.
 
     Rules (evaluated top-down, first match wins):
-    1. Bootstrap admin  → always "admin"
-    2. System admin     → always "admin" (except hidden projects)
-    3. Explicit approved membership row → return that role
-    4. Otherwise        → None (no access)
+    1. Explicit approved membership row → return that role
+    2. Otherwise                        → None (no access)
 
-    Note: designers are NOT implicitly granted access to public projects.
-    They must go through /request-access, which auto-approves them and
-    creates an explicit membership row.  The discover endpoint uses
-    project visibility (not this function) to decide whether the project
-    is *visible* to a designer in the listing.
+    ALL users — including bootstrap admins, system admins, and designers —
+    must go through /request-access to obtain an explicit membership row.
+    The request-access endpoint handles auto-approval rules (e.g. bootstrap
+    admins are auto-approved everywhere, system admins on public/private).
+    Hidden projects are invite-only except for bootstrap admins.
     """
     email = user_email.strip().lower()
-
-    if _is_bootstrap_admin(email):
-        return "admin"
-
-    if visibility == "hidden":
-        # Hidden projects: only bootstrap admin (handled above) or explicit membership
-        membership = await get_membership(session, project_id, email)
-        if membership:
-            return membership.project_role
-        return None
-
-    if system_role == "admin":
-        return "admin"
 
     membership = await get_membership(session, project_id, email)
     if membership:

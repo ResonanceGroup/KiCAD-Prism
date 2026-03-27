@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_for_role_or_404
+from app.api._helpers import get_project_with_acl
 from app.core.security import AuthenticatedUser, require_viewer
 from app.db.db import get_async_session
 from app.services import project_acl_service
@@ -134,11 +134,11 @@ def _normalize_content(content: str, *, field: str = "content") -> str:
 # ============================================================
 
 @router.get("/{project_id}/comments")
-async def get_comments(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_comments(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Get all comments for a project from DB snapshot.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     return comments_store.get_comments_file(project.id, project.path)
 
 
@@ -152,7 +152,7 @@ async def create_comment(
     """
     Create a new comment on the design.  Requires project manager or admin role.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     project_role = await project_acl_service.resolve_effective_project_role(
         session, project.id, user.email, project.visibility, user.role
     )
@@ -191,7 +191,7 @@ async def update_comment(
     """
     Update a comment's status (e.g., resolve it).  Requires project manager or admin role.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     project_role = await project_acl_service.resolve_effective_project_role(
         session, project.id, user.email, project.visibility, user.role
     )
@@ -229,7 +229,7 @@ async def add_reply(
     """
     Add a reply to an existing comment.  Requires project manager or admin role.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     project_role = await project_acl_service.resolve_effective_project_role(
         session, project.id, user.email, project.visibility, user.role
     )
@@ -268,7 +268,7 @@ async def delete_comment(
     """
     Delete a comment.  Requires project manager or admin role.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     project_role = await project_acl_service.resolve_effective_project_role(
         session, project.id, user.email, project.visibility, user.role
     )
@@ -301,7 +301,7 @@ async def push_comments(
     Export DB snapshot to comments.json artifact only.  Requires project manager or admin.
     Git commit/push is intentionally left to the user workflow.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     project_role = await project_acl_service.resolve_effective_project_role(
         session, project.id, user.email, project.visibility, user.role
     )

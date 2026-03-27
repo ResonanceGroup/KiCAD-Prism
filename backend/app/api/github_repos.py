@@ -2,18 +2,20 @@
 
 All routes are prefixed with /api/github by the router mounting in main.py.
 
-All repository operations use the GitHub App installation token rather than
-per-user OAuth tokens.  This means every designer-or-above user can browse
-and clone repositories that the GitHub App has been installed on, without
-needing to have signed in with GitHub themselves.
+Repository browsing uses the user's OAuth token to enforce GitHub permissions.
+Users must have linked their GitHub account via OAuth to browse repositories.
+Cloning uses the GitHub App installation token for server-side operations,
+but users can only clone repositories they have access to on GitHub.
 
 Flow
 ----
-1.  ``GET  /api/github/repos``        — list repositories accessible to the
-    GitHub App installation (filtered to ``GITHUB_ORG_LOGIN`` when set).
+1.  ``GET  /api/github/repos``        — list repositories the authenticated
+    user has access to on GitHub (filtered to ``GITHUB_ORG_LOGIN`` when set).
+    Requires the user to have linked their GitHub account.
 2.  ``POST /api/github/repos/clone``  — clone a GitHub repository onto the
     server using the App token, register it as a KiCAD Prism project, and
     add the requesting user as a project member with *manager* role.
+    Requires the user to have access to the repository on GitHub.
 """
 
 from __future__ import annotations
@@ -29,11 +31,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_github_token_for_user
 from app.core.config import settings
-from app.core.security import AuthenticatedUser, require_designer
+from app.core.roles import role_meets_minimum
+from app.core.security import AuthenticatedUser, get_current_user
 from app.db.db import get_async_session
+from app.github import get_github_client
 from app.github_app import get_app_installation_client, is_app_configured
-from app.services import project_acl_service, project_service
+from app.services import access_service, project_acl_service, project_service
 from app.services.project_service import (
     VISIBILITY_HIDDEN,
     VISIBILITY_PUBLIC,
@@ -93,48 +98,73 @@ def _require_app_configured() -> None:
 
 @router.get("/repos")
 async def list_github_repos(
-    auth_user: AuthenticatedUser = Depends(require_designer),
+    auth_user: AuthenticatedUser = Depends(get_current_user),
+    session = Depends(get_async_session),
 ):
-    """Return GitHub repositories accessible to the GitHub App installation.
+    """Return GitHub repositories the authenticated user has access to.
 
+    Requires the user to have linked their GitHub account via OAuth and have
+    at least designer role.
+    
     When ``GITHUB_ORG_LOGIN`` is set the list is scoped to that organization;
-    otherwise all repositories accessible to the installation are returned.
+    otherwise all repositories the user has access to are returned.
+    
+    This ensures users can only see repositories they have permissions for on GitHub.
     """
+    # Verify user has at least designer role (uses role store, respects bootstrap admins)
+    if not role_meets_minimum(auth_user.role, "designer"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only designers and admins can browse GitHub repositories",
+        )
+    
+    # Get the user's GitHub OAuth token
+    github_token = await get_github_token_for_user(auth_user.email, session)
+    
+    if not github_token:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You must link your GitHub account to browse repositories. "
+                "Go to your profile settings to connect your GitHub account."
+            ),
+        )
+    
     _require_app_configured()
 
     try:
-        async with await get_app_installation_client() as client:
+        async with await get_github_client(github_token) as client:
             org = settings.GITHUB_ORG_LOGIN
             if org:
+                # List org repos the user has access to
                 resp = await client.get(
                     f"/orgs/{org}/repos",
                     params={"per_page": 100, "sort": "updated", "type": "all"},
                 )
             else:
+                # List all repos the user has access to
                 resp = await client.get(
-                    "/installation/repositories",
-                    params={"per_page": 100},
+                    "/user/repos",
+                    params={"per_page": 100, "sort": "updated", "affiliation": "owner,collaborator,organization_member"},
                 )
 
             if resp.status_code == 401:
                 raise HTTPException(
                     status_code=401,
-                    detail="GitHub App token is invalid or expired",
+                    detail="Your GitHub token is invalid or expired. Please unlink and re-link your GitHub account.",
                 )
             if resp.status_code == 403:
                 raise HTTPException(
                     status_code=403,
-                    detail="GitHub App lacks required permissions",
+                    detail="GitHub API rate limit exceeded or insufficient permissions",
                 )
             resp.raise_for_status()
-            raw = resp.json()
-            # /installation/repositories wraps the list under a key
-            repos = raw.get("repositories", raw) if isinstance(raw, dict) else raw
+            repos = resp.json()
 
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Failed to list GitHub repos via App: %s", exc, exc_info=True)
+        logger.error("Failed to list GitHub repos for user %s: %s", auth_user.email, exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"GitHub API error: {type(exc).__name__}: {exc}")
 
     # Mark repos that are already registered on this server
@@ -166,16 +196,38 @@ async def list_github_repos(
 @router.post("/repos/clone")
 async def clone_github_repo(
     body: CloneRequest,
-    auth_user: AuthenticatedUser = Depends(require_designer),
+    auth_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Clone a GitHub repository onto the server and register it as a project.
+
+    Requires the user to have linked their GitHub account, have at least designer role,
+    and have access to the repository on GitHub.
 
     - The requesting user is added as a *manager* of the new project.
     - The clone is read-only from GitHub (``origin`` remote is removed after
       cloning to prevent accidental pushes).
     - Visibility is enforced: only admins may create hidden projects.
     """
+    # Verify user has at least designer role (uses role store, respects bootstrap admins)
+    if not role_meets_minimum(auth_user.role, "designer"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only designers and admins can clone GitHub repositories",
+        )
+    
+    # Get the user's GitHub OAuth token
+    github_token = await get_github_token_for_user(auth_user.email, session)
+    
+    if not github_token:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You must link your GitHub account to clone repositories. "
+                "Go to your profile settings to connect your GitHub account."
+            ),
+        )
+    
     _require_app_configured()
 
     if body.visibility not in VISIBILITY_VALUES:
@@ -184,7 +236,7 @@ async def clone_github_repo(
             detail=f"visibility must be one of {list(VISIBILITY_VALUES)}",
         )
 
-    if body.visibility == VISIBILITY_HIDDEN and auth_user.role not in ("admin",):
+    if body.visibility == VISIBILITY_HIDDEN and not role_meets_minimum(auth_user.role, "admin"):
         raise HTTPException(
             status_code=403, detail="Only admins can create hidden projects"
         )
@@ -192,6 +244,49 @@ async def clone_github_repo(
     safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in body.name).strip()
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid project name")
+
+    # Verify the user has access to this repository on GitHub
+    try:
+        # Extract owner/repo from clone URL
+        # Format: https://github.com/owner/repo.git
+        import re
+        match = re.match(r'https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$', body.clone_url)
+        if not match:
+            raise HTTPException(status_code=400, detail="Invalid GitHub clone URL format")
+        
+        owner, repo_name = match.groups()
+        
+        # Check if user has access to this repository
+        async with await get_github_client(github_token) as client:
+            resp = await client.get(f"/repos/{owner}/{repo_name}")
+            
+            if resp.status_code == 404:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Repository not found or you don't have access to {owner}/{repo_name}",
+                )
+            if resp.status_code == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"You don't have permission to access {owner}/{repo_name}",
+                )
+            resp.raise_for_status()
+            
+            logger.info(
+                "User %s verified to have access to %s/%s",
+                auth_user.email,
+                owner,
+                repo_name,
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to verify repo access for user %s: %s", auth_user.email, exc, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to verify repository access: {exc}",
+        )
 
     # Fetch the installation token once up-front (cached, so cheap)
     try:

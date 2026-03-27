@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Github, CheckCircle2, AlertCircle, ArrowLeft, User as UserIcon, Mail, Lock, AtSign, RefreshCw } from 'lucide-react';
+import { Github, CheckCircle2, AlertCircle, ArrowLeft, User as UserIcon, Mail, Lock, AtSign, RefreshCw, XCircle } from 'lucide-react';
 import { fetchJson, fetchApi, readApiError } from '@/lib/api';
 import type { User } from '../types/auth';
 
@@ -18,13 +18,23 @@ export function ProfilePage({ user, onUserUpdate, githubClientId }: ProfilePageP
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
 
-    // Show a toast if GitHub linking failed and clean up the URL.
+    // Handle GitHub linking success/failure and refresh user data.
     useEffect(() => {
-        if (searchParams.get('link_error')) {
+        const linkError = searchParams.get('link_error');
+        const githubLinked = searchParams.get('github_linked');
+        
+        if (linkError) {
             toast.error('Failed to link GitHub account. Please try again.');
             setSearchParams({}, { replace: true });
+        } else if (githubLinked === 'success') {
+            // OAuth callback succeeded - refresh user data
+            toast.success('GitHub account linked successfully');
+            setSearchParams({}, { replace: true });
+            fetchJson<User>('/api/auth/me')
+                .then(updated => onUserUpdate(updated))
+                .catch(() => toast.error('Failed to refresh user data'));
         }
-    }, [searchParams, setSearchParams]);
+    }, [searchParams, setSearchParams, onUserUpdate]);
 
     // Username / display name
     const [username, setUsername] = useState(user.username ?? '');
@@ -159,15 +169,27 @@ export function ProfilePage({ user, onUserUpdate, githubClientId }: ProfilePageP
 
     const handleConnectGitHub = async () => {
         try {
-            const res = await fetch(`/api/auth/github/link/authorize`);
-            if (!res.ok) {
-                toast.error('Failed to start GitHub connect flow');
-                return;
-            }
-            const data = await res.json() as { authorization_url: string };
+            const data = await fetchJson<{ authorization_url: string }>('/api/auth/github/link/authorize');
             window.location.href = data.authorization_url;
-        } catch {
-            toast.error('Failed to start GitHub connect flow');
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to start GitHub connect flow';
+            toast.error(message);
+        }
+    };
+
+    const handleUnlinkGitHub = async () => {
+        if (!confirm('Are you sure you want to unlink your GitHub account?')) {
+            return;
+        }
+        try {
+            await fetchApi('/api/auth/profile/github', { method: 'DELETE' });
+            toast.success('GitHub account unlinked successfully');
+            // Refresh user data
+            const updated = await fetchJson<User>('/api/auth/me');
+            onUserUpdate(updated);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to unlink GitHub account';
+            toast.error(message);
         }
     };
 
@@ -301,9 +323,21 @@ export function ProfilePage({ user, onUserUpdate, githubClientId }: ProfilePageP
                             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">GitHub</h2>
                         </div>
                         {user.github_connected ? (
-                            <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
-                                <CheckCircle2 className="h-5 w-5 shrink-0" />
-                                <span className="text-sm font-medium">GitHub account linked</span>
+                            <div className="space-y-2">
+                                <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                                    <CheckCircle2 className="h-5 w-5 shrink-0" />
+                                    <span className="text-sm font-medium">GitHub account linked</span>
+                                </div>
+                                {user.github_email && (
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                        <Mail className="h-4 w-4 shrink-0" />
+                                        <span>{user.github_email}</span>
+                                    </div>
+                                )}
+                                <Button variant="destructive" size="sm" onClick={handleUnlinkGitHub} className="w-full sm:w-auto">
+                                    <XCircle className="h-4 w-4 mr-2" />
+                                    Unlink GitHub Account
+                                </Button>
                             </div>
                         ) : (
                             <div className="space-y-3">

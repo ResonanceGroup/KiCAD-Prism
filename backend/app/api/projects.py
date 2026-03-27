@@ -6,9 +6,11 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api._helpers import get_project_for_role_or_404, require_output_type, resolve_path_within_root
+from app.api._helpers import get_project_with_acl, require_output_type, resolve_path_within_root
 from app.core.security import AuthenticatedUser, require_designer, require_viewer
+from app.db.db import get_async_session
 from app.services import (
     file_service,
     folder_service,
@@ -410,13 +412,13 @@ async def get_job_status(job_id: str):
     return status
 
 @router.post("/{project_id}/sync", dependencies=[Depends(require_designer)])
-async def sync_project_endpoint(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def sync_project_endpoint(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Sync project repository with remote.
     Type-1: pulls the project repo.
     Type-2: pulls the parent repo.
     """
-    _ = get_project_for_role_or_404(project_id, user.role)
+    _ = await get_project_with_acl(project_id, user, session)
     result = project_import_service.sync_project(project_id)
     
     if result["status"] == "error":
@@ -435,6 +437,7 @@ async def trigger_workflow(
     project_id: str,
     request: WorkflowRequest,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Trigger a KiCAD workflow (jobset output).
@@ -444,7 +447,7 @@ async def trigger_workflow(
         raise HTTPException(status_code=400, detail="Invalid workflow type")
         
     try:
-        _ = get_project_for_role_or_404(project_id, user.role)
+        _ = await get_project_with_acl(project_id, user, session)
         job_id = project_service.start_workflow_job(project_id, request.type, request.author)
         return {"job_id": job_id}
     except ValueError as e:
@@ -453,22 +456,22 @@ async def trigger_workflow(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_id}/thumbnail")
-async def get_project_thumbnail(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
-    _ = get_project_for_role_or_404(project_id, user.role)
+async def get_project_thumbnail(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
+    _ = await get_project_with_acl(project_id, user, session)
     path = project_service.get_project_thumbnail_path(project_id)
     if not path:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return FileResponse(path)
 
 @router.get("/{project_id}", response_model=project_service.Project)
-async def get_project_detail(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_detail(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """Get detailed project information."""
-    return get_project_for_role_or_404(project_id, user.role)
+    return await get_project_with_acl(project_id, user, session)
 
 
 @router.get("/{project_id}/properties", response_model=ProjectPropertiesResponse)
-async def get_project_properties(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
-    project = get_project_for_role_or_404(project_id, user.role)
+async def get_project_properties(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
+    project = await get_project_with_acl(project_id, user, session)
     repo_path, relative_path = _repo_context(project)
 
     if relative_path:
@@ -520,11 +523,12 @@ async def get_project_overview(
     project_id: str,
     commit: str = None,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Return project detail and README content in one payload for the overview page.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     return {
         "project": project.model_dump(),
         "readme": _load_project_readme_content(project, commit),
@@ -540,11 +544,12 @@ async def get_project_comments_source_urls(
         description="Optional override base URL (e.g. http://localhost:8000).",
     ),
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Get helper URLs to configure KiCad comments REST source for this project.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     resolved_base_url = resolve_comments_base_url(request, explicit_base_url=base_url)
     urls = build_comments_source_urls(project.id, resolved_base_url)
@@ -561,13 +566,13 @@ async def get_project_comments_source_urls(
     }
 
 @router.delete("/{project_id}", dependencies=[Depends(require_designer)])
-async def delete_project_endpoint(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def delete_project_endpoint(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Delete a project from the registry.
     For standalone projects, this also deletes the project files.
     For monorepo sub-projects, only removes the registry entry.
     """
-    _ = get_project_for_role_or_404(project_id, user.role)
+    _ = await get_project_with_acl(project_id, user, session)
     success = project_service.delete_project(project_id)
     if not success:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -578,6 +583,7 @@ async def get_project_files(
     project_id: str,
     type: str = "design",
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     List files in Design-Outputs or Manufacturing-Outputs.
@@ -587,7 +593,7 @@ async def get_project_files(
         type: 'design' or 'manufacturing'
     """
     output_type = require_output_type(type)
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     return file_service.get_project_files(project.path, output_type)
 
 @router.get("/{project_id}/download")
@@ -597,6 +603,7 @@ async def download_file(
     type: str = "design",
     inline: bool = False,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Download a specific file from Design-Outputs or Manufacturing-Outputs.
@@ -608,7 +615,7 @@ async def download_file(
         inline: If True, serve as inline content (view in browser)
     """
     output_type = require_output_type(type)
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     output_dir = _resolve_output_dir(project.path, output_type)
 
     file_path = resolve_path_within_root(output_dir, path, invalid_detail="Invalid file path")
@@ -627,13 +634,14 @@ async def get_project_readme(
     project_id: str,
     commit: str = None,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Get README content from project root.
     If commit is provided, fetch from that commit; otherwise use working directory.
     For Type-2 projects, uses parent repo with relative path prefix.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     content = _load_project_readme_content(project, commit)
     if content is None:
         raise HTTPException(status_code=404, detail="README not found")
@@ -646,6 +654,7 @@ async def get_project_asset(
     commit: Optional[str] = None,
     download: bool = False,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Serve assets (images, etc.) from project directory.
@@ -653,7 +662,7 @@ async def get_project_asset(
     If commit is provided, serve the asset from that commit.
     If download is True, force attachment disposition.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     if commit:
         try:
@@ -679,11 +688,11 @@ async def get_project_asset(
     return FileResponse(file_path)
 
 @router.get("/{project_id}/docs")
-async def get_docs_files(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_docs_files(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     List all files in the documentation folder.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     resolved = path_config_service.resolve_paths(project.path)
     docs_dir = resolved.documentation_dir
@@ -699,13 +708,14 @@ async def get_doc_file_content(
     path: str,
     commit: str = None,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Get markdown file content from documentation folder.
     If commit is provided, fetch from that commit; otherwise use working directory.
     For Type-2 projects, uses parent repo with relative path prefix.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     # Get documentation path from config
     config = path_config_service.get_path_config(project.path)
@@ -738,12 +748,12 @@ async def get_doc_file_content(
     }
 
 @router.get("/{project_id}/releases")
-async def get_project_releases(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_releases(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Get list of Git releases/tags for a project.
     For Type-2 projects, uses parent repo with subproject file tracking.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     repo_path, relative_path = _repo_context(project)
     if relative_path:
@@ -758,12 +768,13 @@ async def get_project_commit_distance(
     project_id: str,
     commit: str,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Count how many commits behind HEAD the requested commit is.
     For Type-2 projects, only commits affecting the subproject path are counted.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     repo_path, relative_path = _repo_context(project)
     commits_behind = get_commit_distance(repo_path, commit, relative_path)
@@ -774,12 +785,13 @@ async def get_project_commits(
     project_id: str,
     limit: int = Query(default=50, ge=1, le=500),
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Get list of commits for a project.
     For Type-2 projects, shows only commits affecting the subproject.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     repo_path, relative_path = _repo_context(project)
     if relative_path:
@@ -791,8 +803,8 @@ async def get_project_commits(
 
 
 @router.get("/{project_id}/schematic")
-async def get_project_schematic(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer)):
-    project = get_project_for_role_or_404(project_id, user.role)
+async def get_project_schematic(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
+    project = await get_project_with_acl(project_id, user, session)
     
     path = project_service.find_schematic_file(project.path)
     if not path:
@@ -809,8 +821,8 @@ async def get_project_schematic(project_id: str, commit: Optional[str] = None, u
     return FileResponse(path)
 
 @router.get("/{project_id}/schematic/subsheets")
-async def get_project_subsheets(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer)):
-    project = get_project_for_role_or_404(project_id, user.role)
+async def get_project_subsheets(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
+    project = await get_project_with_acl(project_id, user, session)
     
     main_path = project_service.find_schematic_file(project.path)
     if not main_path:
@@ -830,8 +842,8 @@ async def get_project_subsheets(project_id: str, commit: Optional[str] = None, u
     return {"files": subsheet_urls}
 
 @router.get("/{project_id}/pcb")
-async def get_project_pcb(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer)):
-    project = get_project_for_role_or_404(project_id, user.role)
+async def get_project_pcb(project_id: str, commit: Optional[str] = None, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
+    project = await get_project_with_acl(project_id, user, session)
     
     path = project_service.find_pcb_file(project.path)
     if not path:
@@ -848,12 +860,12 @@ async def get_project_pcb(project_id: str, commit: Optional[str] = None, user: A
     return FileResponse(path)
 
 @router.get("/{project_id}/3d-model/info")
-async def get_project_3d_model_info(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_3d_model_info(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """Return the asset URL and filename for the 3D model.
     Clients should use the returned URL directly so the filename extension is preserved
     (online-3d-viewer infers the format from the URL extension).
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     path = project_service.find_3d_model(project.path)
     if not path:
@@ -864,8 +876,8 @@ async def get_project_3d_model_info(project_id: str, user: AuthenticatedUser = D
     return {"url": f"/api/projects/{project_id}/asset/{rel_path}", "filename": filename}
 
 @router.get("/{project_id}/3d-model")
-async def get_project_3d_model(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
-    project = get_project_for_role_or_404(project_id, user.role)
+async def get_project_3d_model(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
+    project = await get_project_with_acl(project_id, user, session)
     
     path = project_service.find_3d_model(project.path)
     if not path:
@@ -877,8 +889,8 @@ async def get_project_3d_model(project_id: str, user: AuthenticatedUser = Depend
     return RedirectResponse(url=f"/api/projects/{project_id}/asset/{rel_path}", status_code=307)
 
 @router.get("/{project_id}/ibom")
-async def get_project_ibom(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
-    project = get_project_for_role_or_404(project_id, user.role)
+async def get_project_ibom(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
+    project = await get_project_with_acl(project_id, user, session)
     
     path = project_service.find_ibom_file(project.path)
     if not path:
@@ -887,14 +899,14 @@ async def get_project_ibom(project_id: str, user: AuthenticatedUser = Depends(re
 
 
 @router.get("/{project_id}/bom")
-async def get_project_bom(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_bom(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """Generate a BOM from the project's schematic files (main + sub-sheets).
 
     Components are grouped by Value. Returns a list of BOM row objects with
     ``value``, ``quantity``, ``references``, ``footprints``, ``datasheet``,
     ``description``, and ``extra_fields``.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     main_path = project_service.find_schematic_file(project.path)
     if not main_path:
@@ -921,12 +933,12 @@ async def get_project_bom(project_id: str, user: AuthenticatedUser = Depends(req
 # Path Configuration Endpoints
 
 @router.get("/{project_id}/config")
-async def get_project_config(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_config(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Get path configuration for a project.
     Returns the current path configuration (from .prism.json or auto-detected).
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     config = path_config_service.get_path_config(project.path)
     resolved = path_config_service.resolve_paths(project.path, config)
@@ -945,12 +957,12 @@ async def get_project_config(project_id: str, user: AuthenticatedUser = Depends(
 
 
 @router.post("/{project_id}/detect-paths", dependencies=[Depends(require_designer)])
-async def detect_project_paths(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def detect_project_paths(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Run auto-detection on project paths.
     Returns detected paths without saving them.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     detected = path_config_service.detect_paths(project.path)
     
@@ -964,12 +976,13 @@ async def detect_project_paths(project_id: str, user: AuthenticatedUser = Depend
 async def get_project_filetree(
     project_id: str,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     List all files and directories in the project directory recursively.
     Used by the frontend file browser to allow manual path association.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     project_path = Path(project.path)
 
     if not project_path.exists():
@@ -1002,12 +1015,13 @@ _FILES_ALL_SKIP = {".git", "__pycache__", ".tox", "node_modules"}
 async def get_all_project_files(
     project_id: str,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Return all files and folders in the project directory recursively,
     suitable for the Assets Portal file browser.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     project_path = Path(project.path)
 
     if not project_path.exists():
@@ -1049,12 +1063,13 @@ async def update_project_config(
     project_id: str,
     config: PathConfig,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Update path configuration for a project.
     Saves configuration to .prism.json file.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     if config.project_name is not None:
         normalized_name = config.project_name.strip()
@@ -1094,12 +1109,12 @@ class ProjectDescriptionRequest(BaseModel):
 
 
 @router.get("/{project_id}/name")
-async def get_project_name(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_name(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Get the display name for a project.
     Returns custom name from .prism.json or fallback name.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     return {
         "display_name": project.display_name,
@@ -1112,11 +1127,12 @@ async def update_project_name(
     project_id: str,
     request: ProjectNameRequest,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Update the display name for a project in .prism.json.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
     
     display_name = request.display_name.strip()
     if not display_name:
@@ -1139,11 +1155,11 @@ async def update_project_name(
 
 
 @router.get("/{project_id}/description")
-async def get_project_description(project_id: str, user: AuthenticatedUser = Depends(require_viewer)):
+async def get_project_description(project_id: str, user: AuthenticatedUser = Depends(require_viewer), session: AsyncSession = Depends(get_async_session)):
     """
     Get project description from project registry.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     return {
         "description": project.description
@@ -1155,11 +1171,12 @@ async def update_project_description(
     project_id: str,
     request: ProjectDescriptionRequest,
     user: AuthenticatedUser = Depends(require_viewer),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """
     Update project description in project registry.
     """
-    project = get_project_for_role_or_404(project_id, user.role)
+    project = await get_project_with_acl(project_id, user, session)
 
     next_description = request.description.strip()
     if not next_description:

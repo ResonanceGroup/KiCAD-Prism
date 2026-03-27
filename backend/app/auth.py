@@ -30,8 +30,8 @@ from sqlalchemy import func, select
 from app.core.config import settings
 from app.core.encryption import decrypt_token, encrypt_token
 from app.core.session import create_session_token, set_session_cookie
-from app.db.db import get_user_db
-from app.db.models import User
+from app.db.db import get_async_session, get_user_db
+from app.db.models import OAuthAccount, User
 from app.services import access_service
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,8 @@ class UserRead(schemas.BaseUser[uuid.UUID]):
     username: Optional[str] = None
     display_name: Optional[str] = None
     notification_email: Optional[str] = None
+    github_username: Optional[str] = None
+    github_email: Optional[str] = None
 
 
 class UserCreate(schemas.BaseUserCreate):
@@ -178,7 +180,7 @@ async def _check_github_org_membership(access_token: str) -> None:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         # Use /user/memberships/orgs/{org} instead of /orgs/{org}/members/{username}.
         # The members endpoint returns 404 for private org members; the memberships
         # endpoint checks the authenticated user's own membership and works for both
@@ -214,7 +216,7 @@ async def _fetch_github_user_info(access_token: str) -> dict:
         "X-GitHub-Api-Version": "2022-11-28",
     }
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get("https://api.github.com/user", headers=headers)
             if resp.status_code == 200:
                 return resp.json()
@@ -415,8 +417,9 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             # If the login isn't taken yet, also set it as the in-app username.
             github_info = await _fetch_github_user_info(access_token)
             github_login: Optional[str] = github_info.get("login") or None
+            updates: dict = {"github_email": account_email}
             if github_login:
-                updates: dict = {"github_username": github_login}
+                updates["github_username"] = github_login
                 # Only set the in-app username if the user doesn't have one yet.
                 if not user.username:
                     # Case-insensitive check: if no other user has the same login
@@ -428,10 +431,10 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
                     )
                     if clash.unique().scalar_one_or_none() is None:
                         updates["username"] = github_login
-                try:
-                    user = await self.user_db.update(user, updates)
-                except Exception as exc:
-                    logger.warning("Could not update GitHub username for %s: %s", account_email, exc)
+            try:
+                user = await self.user_db.update(user, updates)
+            except Exception as exc:
+                logger.warning("Could not update GitHub info for %s: %s", account_email, exc)
         elif _is_domain_whitelisted(account_email):
             _auto_approve_in_rbac(account_email)
 
@@ -451,6 +454,13 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         """Intercept the OAuth-associate callback to apply GitHub-specific
         post-link logic (identical to the post-login logic in oauth_callback).
         """
+        logger.info(
+            "OAuth associate callback started: user=%s, oauth_name=%s, account_email=%s",
+            user.email,
+            oauth_name,
+            account_email,
+        )
+        
         user = await super().oauth_associate_callback(
             user,
             oauth_name,
@@ -464,7 +474,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
 
         if oauth_name == "github":
             encrypted = encrypt_token(access_token)
-            updates: dict = {}
+            updates: dict = {"github_email": account_email}
             if encrypted is not None:
                 updates["github_access_token_encrypted"] = encrypted
 
@@ -495,6 +505,11 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
 
             _auto_assign_github_designer(user.email)
 
+        logger.info(
+            "OAuth associate callback completed successfully: user=%s, oauth_name=%s",
+            user.email,
+            oauth_name,
+        )
         return user
 
 
@@ -537,7 +552,23 @@ auth_backend = AuthenticationBackend(
 # Create it at: https://github.com/organizations/YOUR_ORG/settings/applications/new
 # The consent screen will show your organization's name and branding.
 
-github_oauth_client = GitHubOAuth2(
+class _TimeoutGitHubOAuth2(GitHubOAuth2):
+    """GitHubOAuth2 client with explicit timeout to prevent Cloudflare 524 errors.
+    
+    Overrides get_httpx_client to return a client with a 30-second timeout for
+    all outbound requests to GitHub's API (token exchange, get_id_email, etc.).
+    This prevents the OAuth callback from exceeding Cloudflare's 100s timeout.
+    """
+    def get_httpx_client(self):
+        import contextlib
+        @contextlib.asynccontextmanager
+        async def _client():
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                yield client
+        return _client()
+
+
+github_oauth_client = _TimeoutGitHubOAuth2(
     client_id=settings.GITHUB_CLIENT_ID,
     client_secret=settings.GITHUB_CLIENT_SECRET,
     scopes=[s.strip() for s in settings.GITHUB_SCOPES.split(",") if s.strip()],
@@ -552,21 +583,49 @@ fastapi_users_instance = FastAPIUsers[User, uuid.UUID](get_user_manager, [auth_b
 
 
 # ---------------------------------------------------------------------------
-# Dependency: current user + decrypted GitHub token
+# Helper: Get GitHub token for an authenticated user
 # ---------------------------------------------------------------------------
 
-async def get_current_user_with_github_token(
-    user: User = Depends(fastapi_users_instance.current_user()),
-) -> tuple[User, Optional[str]]:
-    """FastAPI dependency that returns the authenticated user together with their
-    decrypted GitHub access token.
-
-    The token is ``None`` when:
-    - The user has not authenticated via GitHub OAuth, or
-    - ``TOKEN_ENCRYPTION_KEY`` is not configured, or
-    - Decryption fails (wrong key / corrupted value).
+async def get_github_token_for_user(email: str, session) -> Optional[str]:
+    """Retrieve the GitHub OAuth token for a user by email.
+    
+    Returns None if the user hasn't linked their GitHub account.
+    
+    The token is retrieved from:
+    1. ``user.github_access_token_encrypted`` (if TOKEN_ENCRYPTION_KEY is set), or
+    2. The ``oauth_accounts`` table (fallback when encryption is disabled).
     """
     token: Optional[str] = None
-    if user.github_access_token_encrypted:
-        token = decrypt_token(user.github_access_token_encrypted)
-    return user, token
+    
+    # Query the User model to check for encrypted token and oauth accounts
+    result = await session.execute(
+        select(User).where(func.lower(User.email) == email.lower())
+    )
+    db_user = result.unique().scalar_one_or_none()
+    
+    if not db_user:
+        logger.debug("No user found with email %s", email)
+        return None
+    
+    # Try encrypted token first (if TOKEN_ENCRYPTION_KEY is configured)
+    if db_user.github_access_token_encrypted:
+        token = decrypt_token(db_user.github_access_token_encrypted)
+        if token:
+            logger.debug("Retrieved GitHub token from encrypted user field for %s", email)
+            return token
+    
+    # Fallback: query oauth_accounts table for GitHub token
+    result = await session.execute(
+        select(OAuthAccount).where(
+            OAuthAccount.user_id == db_user.id,
+            OAuthAccount.oauth_name == "github",
+        )
+    )
+    oauth_account = result.scalar_one_or_none()
+    if oauth_account and oauth_account.access_token:
+        token = oauth_account.access_token
+        logger.debug("Retrieved GitHub token from oauth_accounts table for %s", email)
+        return token
+    
+    logger.debug("No GitHub token found for user %s", email)
+    return None

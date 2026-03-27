@@ -304,7 +304,11 @@ async def delete_user(
 
     # ------------------------------------------------------------------
     # Guard: block if user is the sole explicit admin of any project.
+    # Only consider projects that still exist in the registry — orphaned
+    # membership rows for deleted projects are cleaned up, not blocking.
     # ------------------------------------------------------------------
+    from app.services import project_service
+
     admin_project_rows = await session.execute(
         select(ProjectMembership.project_id).where(
             ProjectMembership.user_email == normalized,
@@ -313,8 +317,28 @@ async def delete_user(
     )
     admin_project_ids = [row[0] for row in admin_project_rows.all()]
 
+    # Filter out projects that no longer exist in the registry
+    active_admin_project_ids = [
+        pid for pid in admin_project_ids
+        if project_service.get_project_by_id(pid) is not None
+    ]
+
+    # Clean up orphaned membership rows for deleted projects
+    orphaned_project_ids = set(admin_project_ids) - set(active_admin_project_ids)
+    if orphaned_project_ids:
+        for orphaned_id in orphaned_project_ids:
+            await session.execute(
+                delete(ProjectMembership).where(
+                    ProjectMembership.project_id == orphaned_id,
+                )
+            )
+        logger.info(
+            "Cleaned up orphaned membership rows for deleted projects: %s",
+            orphaned_project_ids,
+        )
+
     sole_admin_projects: list[str] = []
-    for project_id in admin_project_ids:
+    for project_id in active_admin_project_ids:
         other_admin_count = await session.scalar(
             select(func.count(ProjectMembership.id)).where(
                 ProjectMembership.project_id == project_id,

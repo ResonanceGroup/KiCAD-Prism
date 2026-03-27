@@ -552,9 +552,8 @@ function App() {
                                                                         className="w-full"
                                                                         onClick={async () => {
                                                                             setProfileOpen(false);
-                                                                            const redirectUrl = encodeURIComponent(window.location.origin + "/");
                                                                             try {
-                                                                                const res = await fetch(`/api/auth/github/authorize?redirect_url=${redirectUrl}`);
+                                                                                const res = await fetch(`/api/auth/github/link/authorize`);
                                                                                 const data = await res.json();
                                                                                 window.location.href = data.authorization_url;
                                                                             } catch {

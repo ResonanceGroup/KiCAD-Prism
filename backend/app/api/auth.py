@@ -49,6 +49,7 @@ class UserSession(BaseModel):
     notification_email: Optional[str] = None
     has_password: bool = False
     github_username: Optional[str] = None
+    github_email: Optional[str] = None
 
 
 class AuthConfig(BaseModel):
@@ -224,6 +225,7 @@ async def get_current_session_user(
     notification_email: Optional[str] = None
     has_password = False
     github_username: Optional[str] = None
+    github_email: Optional[str] = None
     try:
         result = await session.execute(
             select(UserModel).where(UserModel.email == user.email.lower())
@@ -233,6 +235,7 @@ async def get_current_session_user(
             username = db_user.username
             notification_email = db_user.notification_email
             github_username = db_user.github_username
+            github_email = db_user.github_email
             # A user has a usable password when hashed_password is set and is not
             # the fastapi-users "unusable password" sentinel ("!").
             has_password = bool(db_user.hashed_password and db_user.hashed_password != "!")
@@ -252,6 +255,7 @@ async def get_current_session_user(
         notification_email=notification_email,
         has_password=has_password,
         github_username=github_username,
+        github_email=github_email,
     )
 
 
@@ -520,3 +524,87 @@ async def set_password(
         )
 
     return {"success": True, "message": "Password set successfully. You can now log in with your email and password."}
+
+
+@router.delete("/profile/github")
+async def unlink_github(
+    user: AuthenticatedUser = Depends(get_current_user),
+    session=Depends(get_async_session),
+):
+    """
+    Unlink the user's GitHub OAuth account.
+    
+    Removes the OAuth account association, clears GitHub-specific fields,
+    and revokes the OAuth token on GitHub's side to ensure the authorization
+    is fully terminated.
+    """
+    import base64
+
+    logger.info("GitHub unlink requested by user: %s", user.email)
+
+    result = await session.execute(
+        select(UserModel).where(UserModel.email == user.email.lower())
+    )
+    db_user = result.unique().scalar_one_or_none()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    # Check if the user has a GitHub OAuth account linked
+    github_account = next(
+        (acc for acc in (db_user.oauth_accounts or []) if acc.oauth_name == "github"),
+        None,
+    )
+    if github_account is None:
+        raise HTTPException(status_code=400, detail="No GitHub account is currently linked.")
+
+    logger.info("Found GitHub account to unlink: account_id=%s", github_account.account_id)
+
+    # Revoke the OAuth token on GitHub's side before deleting locally
+    # This ensures the user's GitHub authorization is fully terminated
+    if github_account.access_token and settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET:
+        try:
+            import httpx
+            logger.info("Attempting to revoke GitHub token for %s", user.email)
+            auth_string = f"{settings.GITHUB_CLIENT_ID}:{settings.GITHUB_CLIENT_SECRET}"
+            auth_encoded = base64.b64encode(auth_string.encode()).decode()
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.request(
+                    method="DELETE",
+                    url=f"https://api.github.com/applications/{settings.GITHUB_CLIENT_ID}/token",
+                    headers={
+                        "Authorization": f"Basic {auth_encoded}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                    json={"access_token": github_account.access_token},
+                )
+                if response.status_code in (204, 404):
+                    logger.info(
+                        "Successfully revoked GitHub token for %s: HTTP %d",
+                        user.email,
+                        response.status_code,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to revoke GitHub token for %s: HTTP %d, body: %s",
+                        user.email,
+                        response.status_code,
+                        response.text,
+                    )
+        except Exception as exc:
+            # Log but don't block the unlink if revocation fails
+            logger.warning("Failed to revoke GitHub token for %s: %s", user.email, exc)
+
+    # Remove the OAuth account from the user
+    db_user.oauth_accounts.remove(github_account)
+    await session.delete(github_account)
+
+    # Clear GitHub-specific fields on the user
+    db_user.github_username = None
+    db_user.github_email = None
+    db_user.github_access_token_encrypted = None
+
+    await session.commit()
+
+    logger.info("Successfully unlinked GitHub account for user: %s", user.email)
+    return {"success": True, "message": "GitHub account unlinked successfully."}

@@ -46,6 +46,10 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     github_username: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True, default=None
     )
+    # Primary email on the linked GitHub account (read-only in the UI).
+    github_email: Mapped[Optional[str]] = mapped_column(
+        String(254), nullable=True, default=None
+    )
 
     oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(
         "OAuthAccount", lazy="joined", cascade="all, delete-orphan"

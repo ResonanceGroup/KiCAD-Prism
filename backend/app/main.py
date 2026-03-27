@@ -124,6 +124,7 @@ async def _migrate_user_profile_columns() -> None:
         ("display_name", "VARCHAR(100)"),
         ("notification_email", "VARCHAR(254)"),
         ("github_username", "VARCHAR(50)"),
+        ("github_email", "VARCHAR(254)"),
     ]
     async with engine.begin() as conn:
         for col_name, col_type in new_columns:
@@ -198,7 +199,7 @@ app = FastAPI(title="KiCAD Prism API", lifespan=lifespan)
 if settings.APP_URL:
     _oauth_success_url = (settings.APP_URL.rstrip("/") + "/").encode()
     _oauth_denied_url = (settings.APP_URL.rstrip("/") + "/?login_error=access_denied").encode()
-    _oauth_link_success_url = (settings.APP_URL.rstrip("/") + "/profile").encode()
+    _oauth_link_success_url = (settings.APP_URL.rstrip("/") + "/profile?github_linked=success").encode()
     _oauth_link_error_url = (settings.APP_URL.rstrip("/") + "/profile?link_error=failed").encode()
 
     class _OAuthCallbackRedirectMiddleware:
@@ -220,12 +221,15 @@ if settings.APP_URL:
                     captured_status.append(status)
                     if status == 204:
                         # Successful auth — redirect, preserving all cookies.
+                        # Filter out Content-Length header since we're sending empty body
+                        headers = [
+                            (name, value) for name, value in message.get("headers", [])
+                            if name.lower() != b"content-length"
+                        ]
                         await send({
                             "type": "http.response.start",
                             "status": 302,
-                            "headers": list(message.get("headers", [])) + [
-                                (b"location", _oauth_success_url),
-                            ],
+                            "headers": headers + [(b"location", _oauth_success_url)],
                         })
                     elif status == 403:
                         # No RBAC role — redirect to login error page.
@@ -271,12 +275,15 @@ if settings.APP_URL:
                     captured_status.append(status)
                     if status == 200:
                         # Association succeeded — redirect to profile, preserving cookies.
+                        # Filter out Content-Length header since we're sending empty body
+                        headers = [
+                            (name, value) for name, value in message.get("headers", [])
+                            if name.lower() != b"content-length"
+                        ]
                         await send({
                             "type": "http.response.start",
                             "status": 302,
-                            "headers": list(message.get("headers", [])) + [
-                                (b"location", _oauth_link_success_url),
-                            ],
+                            "headers": headers + [(b"location", _oauth_link_success_url)],
                         })
                     elif status >= 400:
                         # Any error — redirect to profile with error flag.

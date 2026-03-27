@@ -659,18 +659,45 @@ async def request_project_access(
     session: AsyncSession = Depends(get_async_session),
 ):
     """
-    Request access to a project.
+    Request access to a project.  All users must go through this endpoint.
 
     Auto-approval rules (no manager action needed):
-    - System admin      → always auto-approved as project admin
-    - System designer   → auto-approved as project viewer on PUBLIC projects only
+    - Bootstrap admin   → always auto-approved as project admin (including hidden)
+    - System admin      → auto-approved as project admin on PUBLIC and PRIVATE
+    - System designer   → auto-approved as project manager on PUBLIC projects only
 
     Manual approval (project manager/admin must approve):
-    - System designer on PRIVATE projects
+    - System designer on PRIVATE projects (manager or admin)
     - System viewer on any project
+
+    Hidden projects are invite-only for everyone except bootstrap admins.
     """
     project = _get_project_or_404(project_id)
 
+    # --- Bootstrap admin: auto-approved as admin everywhere (including hidden) ---
+    if project_acl_service._is_bootstrap_admin(user.email):
+        existing = await project_acl_service.get_membership(session, project_id, user.email)
+        if existing:
+            raise HTTPException(status_code=400, detail="You are already a member of this project")
+        membership = await project_acl_service.upsert_membership(
+            session,
+            project_id=project_id,
+            user_email=user.email,
+            project_role="admin",
+            added_by="system:auto_approved",
+        )
+        return {
+            "id": None,
+            "project_id": project_id,
+            "user_email": user.email,
+            "requested_role": "admin",
+            "status": "auto_approved",
+            "requested_at": datetime.utcnow().isoformat(),
+            "reviewed_by": "system",
+            "reviewed_at": datetime.utcnow().isoformat(),
+        }
+
+    # Hidden projects: invite-only for everyone except bootstrap admins
     if project.visibility == VISIBILITY_HIDDEN:
         raise HTTPException(status_code=403, detail="Hidden projects are invite-only")
 
@@ -681,7 +708,7 @@ async def request_project_access(
     if body.requested_role not in ("viewer", "manager"):
         raise HTTPException(status_code=400, detail="requested_role must be viewer or manager")
 
-    # --- System admin: always auto-approved as project admin ---
+    # --- System admin on PUBLIC or PRIVATE: auto-approved as project admin ---
     if user.role == "admin":
         membership = await project_acl_service.upsert_membership(
             session,
@@ -701,20 +728,20 @@ async def request_project_access(
             "reviewed_at": datetime.utcnow().isoformat(),
         }
 
-    # --- System designer on a PUBLIC project: auto-approved as viewer ---
+    # --- System designer on a PUBLIC project: auto-approved as manager ---
     if user.role == "designer" and project.visibility == VISIBILITY_PUBLIC:
         membership = await project_acl_service.upsert_membership(
             session,
             project_id=project_id,
             user_email=user.email,
-            project_role="viewer",
+            project_role="manager",
             added_by="system:auto_approved",
         )
         return {
             "id": None,
             "project_id": project_id,
             "user_email": user.email,
-            "requested_role": "viewer",
+            "requested_role": "manager",
             "status": "auto_approved",
             "requested_at": datetime.utcnow().isoformat(),
             "reviewed_by": "system",
